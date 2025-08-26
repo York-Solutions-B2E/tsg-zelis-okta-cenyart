@@ -1,5 +1,5 @@
-using NUnit.Framework;
 using Microsoft.EntityFrameworkCore;
+using Api.Data;
 
 namespace Tests.Database;
 

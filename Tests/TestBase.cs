@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Api.Data;
 
 namespace Tests;
 

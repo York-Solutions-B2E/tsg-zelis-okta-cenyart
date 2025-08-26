@@ -56,7 +56,10 @@ dotnet user-secrets list --project Api
 ```zsh
 // Api
 dotnet add package Microsoft.EntityFrameworkCore --project Api
-dotnet add package FluentAssertions --project Api
+
+// Tests
+dotnet add package FluentAssertions --project Tests
+dotnet add Tests/WebApi.Tests package Microsoft.EntityFrameworkCore.InMemory --project Tests
 ```
 
 ```bash
