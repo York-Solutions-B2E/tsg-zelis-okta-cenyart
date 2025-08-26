@@ -53,6 +53,12 @@ dotnet user-secrets list --project Blazor
 dotnet user-secrets list --project Api
 ```
 
+```zsh
+// Api
+dotnet add package Microsoft.EntityFrameworkCore --project Api
+dotnet add package FluentAssertions --project Api
+```
+
 ```bash
 docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=YourStrongPassword123!' \
   -p 1433:1433 --name ZelisOktaLocal \
