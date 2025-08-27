@@ -56,6 +56,9 @@ dotnet user-secrets list --project Api
 ```zsh
 // Api
 dotnet add package Microsoft.EntityFrameworkCore --project Api
+dotnet add package Microsoft.EntityFrameworkCore.Design --project Api
+dotnet add package Microsoft.EntityFrameworkCore.SqlServer --project Api
+
 
 // Tests
 dotnet add package FluentAssertions --project Tests
@@ -66,11 +69,15 @@ dotnet add Tests/WebApi.Tests package Microsoft.EntityFrameworkCore.InMemory --p
 docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=YourStrongPassword123!' \
   -p 1433:1433 --name ZelisOktaLocal \
   -d mcr.microsoft.com/mssql/server:2022-latest
+
+# Add initial migration
+dotnet ef migrations add InitialCreate --project Api
 ```
 
 ```zsh
 dotnet clean
 dotnet build
 dotnet test
-dotnet run
+dotnet run --project Api
+dotnet run --project Blazor
 ```

@@ -4,3 +4,6 @@
 # Build results
 bin/
 obj/
+
+# Entity Framework
+**/Migrations/

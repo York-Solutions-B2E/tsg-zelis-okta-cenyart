@@ -16,6 +16,7 @@ public abstract class TestBase
 
         Db = new AppDbContext(options);
         Db.Database.EnsureCreated();
+        DbSeeder.Seed(Db);
     }
 
     [TearDown]
