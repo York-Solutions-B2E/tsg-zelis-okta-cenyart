@@ -89,7 +89,10 @@ public class DatabaseTests : TestBase
         await Db.SaveChangesAsync();
 
         var fromDb = Db.SecurityEvents.First();
-        Assert.That(fromDb.EventType, Is.EqualTo("LoginSuccess"));
-        Assert.That(fromDb.Details, Does.Contain("provider=Okta"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(fromDb.EventType, Is.EqualTo("LoginSuccess"));
+            Assert.That(fromDb.Details, Does.Contain("provider=Okta"));
+        });
     }
 }
