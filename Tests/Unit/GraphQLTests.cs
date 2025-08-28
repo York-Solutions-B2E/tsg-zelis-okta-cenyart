@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using HotChocolate.Execution;
 using Microsoft.Extensions.DependencyInjection;
 using Api.Data;
+using Api.GraphQL;
 
 namespace Tests;
 
@@ -26,8 +27,8 @@ public class GraphQLTests
         var services = new ServiceCollection();
         services.AddSingleton(_db);
         services.AddGraphQL()
-            .AddQueryType<Queries>()
-            .AddMutationType<Mutations>();
+            .AddQueryType<Query>()
+            .AddMutationType<Mutation>();
 
         _sp = services.BuildServiceProvider();
         _executor = await _sp.GetRequiredService<IRequestExecutorResolver>()
@@ -228,15 +229,4 @@ public class GraphQLTests
         Assert.That(result, Does.Not.Contain("errors"));
         Assert.That(result, Contains.Substring("securityEvents"));
     }
-}
-
-
-public class Queries 
-{
-
-}
-
-public class Mutations
-{
-
 }

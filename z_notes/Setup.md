@@ -68,6 +68,7 @@ dotnet add package FluentAssertions --project Tests
 dotnet add package Microsoft.EntityFrameworkCore.InMemory --project Tests
 dotnet add package HotChocolate.AspNetCore --project Tests
 dotnet add package HotChocolate.Execution --project Tests
+dotnet add package Moq --project Tests
 ```
 
 ```bash

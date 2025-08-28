@@ -1,10 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Api.Data;
 
-namespace Tests;
+namespace Tests.Integration;
 
 [TestFixture]
-public class DatabaseTests : TestBase
+public class DatabaseTests : TestInMemory
 {
     [Test]
     public void Should_Have_Roles_Seeded()

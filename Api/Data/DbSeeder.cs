@@ -6,74 +6,67 @@ public static class DbSeeder
 {
     public static void Seed(AppDbContext db)
     {
-        // Roles
-        var roleBasic = new Role
-        {
-            Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-            Name = "BasicUser",
-            Description = "Default role"
-        };
-        var roleObserver = new Role
-        {
-            Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
-            Name = "AuthObserver",
-            Description = "Can view auth events"
-        };
-        var roleAuditor = new Role
-        {
-            Id = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc"),
-            Name = "SecurityAuditor",
-            Description = "Can audit role changes"
-        };
+        // Roles (deterministic GUIDs)
+        var roleBasicId    = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var roleObserverId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var roleAuditorId  = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
-        if (!db.Roles.Any())
-            db.Roles.AddRange(roleBasic, roleObserver, roleAuditor);
+        var claimAuthEventsId = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd");
+        var claimRoleChangesId = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
 
-        // Claims
-        var claimAuthEvents = new Claim
+        if (!db.Roles.Any(r => r.Name == "BasicUser"))
         {
-            Id = Guid.Parse("dddddddd-dddd-dddd-dddd-dddddddddddd"),
-            Type = "permissions",
-            Value = "Audit.ViewAuthEvents"
-        };
-        var claimRoleChanges = new Claim
+            db.Roles.Add(new Role { Id = roleBasicId, Name = "BasicUser", Description = "Default role" });
+        }
+        if (!db.Roles.Any(r => r.Name == "AuthObserver"))
         {
-            Id = Guid.Parse("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"),
-            Type = "permissions",
-            Value = "Audit.RoleChanges"
-        };
+            db.Roles.Add(new Role { Id = roleObserverId, Name = "AuthObserver", Description = "Can view auth events" });
+        }
+        if (!db.Roles.Any(r => r.Name == "SecurityAuditor"))
+        {
+            db.Roles.Add(new Role { Id = roleAuditorId, Name = "SecurityAuditor", Description = "Can audit role changes" });
+        }
 
-        if (!db.Claims.Any())
-            db.Claims.AddRange(claimAuthEvents, claimRoleChanges);
+        if (!db.Claims.Any(c => c.Value == "Audit.ViewAuthEvents"))
+        {
+            db.Claims.Add(new Claim { Id = claimAuthEventsId, Type = "permissions", Value = "Audit.ViewAuthEvents" });
+        }
+        if (!db.Claims.Any(c => c.Value == "Audit.RoleChanges"))
+        {
+            db.Claims.Add(new Claim { Id = claimRoleChangesId, Type = "permissions", Value = "Audit.RoleChanges" });
+        }
 
         db.SaveChanges();
 
-        // Role ↔ Claim links
+        // Role ↔ Claim links (attach claims to role navigation properties if not present)
         var observer = db.Roles.Include(r => r.Claims).First(r => r.Name == "AuthObserver");
-        if (observer.Claims.Count == 0)
-        {
-            observer.Claims.Add(db.Claims.First(c => c.Value == "Audit.ViewAuthEvents"));
-        }
-
         var auditor = db.Roles.Include(r => r.Claims).First(r => r.Name == "SecurityAuditor");
-        if (auditor.Claims.Count == 0)
-        {
-            auditor.Claims.Add(db.Claims.First(c => c.Value == "Audit.ViewAuthEvents"));
-            auditor.Claims.Add(db.Claims.First(c => c.Value == "Audit.RoleChanges"));
-        }
+
+        var claimAuth = db.Claims.First(c => c.Value == "Audit.ViewAuthEvents");
+        var claimRole = db.Claims.First(c => c.Value == "Audit.RoleChanges");
+
+        if (!observer.Claims.Any(c => c.Value == claimAuth.Value))
+            observer.Claims.Add(claimAuth);
+
+        if (!auditor.Claims.Any(c => c.Value == claimAuth.Value))
+            auditor.Claims.Add(claimAuth);
+        if (!auditor.Claims.Any(c => c.Value == claimRole.Value))
+            auditor.Claims.Add(claimRole);
+
+        db.SaveChanges();
 
         // Default user
-        if (!db.Users.Any())
+        if (!db.Users.Any(u => u.ExternalId == "seed-user-sub"))
         {
+            var basic = db.Roles.First(r => r.Name == "BasicUser");
             db.Users.Add(new User
             {
                 Id = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
                 ExternalId = "seed-user-sub",
                 Email = "seeduser@example.com",
-                RoleId = roleBasic.Id
+                RoleId = basic.Id
             });
+            db.SaveChanges();
         }
-
-        db.SaveChanges();
     }
 }
