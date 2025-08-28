@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Api.Data;
 
-namespace Tests.Database;
+namespace Tests;
 
 [TestFixture]
 public class DatabaseTests : TestBase
