@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Api.Data;
+using Microsoft.EntityFrameworkCore;
 
 namespace Api.Auth
 {
@@ -12,6 +12,7 @@ namespace Api.Auth
             var user = await _db.Users
                 .Include(u => u.Role)
                 .FirstOrDefaultAsync(u => u.Id == userId, ct);
+
             return user?.Role?.Name;
         }
     }

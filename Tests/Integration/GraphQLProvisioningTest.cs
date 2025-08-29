@@ -1,8 +1,14 @@
-using System.Text.Json;
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using HotChocolate.Execution;
-using Microsoft.Extensions.DependencyInjection;
-using Api.Auth;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using NUnit.Framework;
+using Api.Data;
+using Api.Auth;
 using Api.GraphQL;
 
 namespace Tests.Integration;
@@ -34,11 +40,27 @@ public class GraphQLProvisioningTest : TestInMemory
         _executor = await sp.GetRequiredService<IRequestExecutorResolver>().GetRequestExecutorAsync();
     }
 
-    private async Task<JsonDocument> ExecJson(string gql)
+    private async Task<IExecutionResult> Exec(string gql)
     {
-        var res = await _executor.ExecuteAsync(builder => builder.SetQuery(gql));
-        var json = await res.ToJsonAsync();
-        return JsonDocument.Parse(json);
+        var res = await _executor.ExecuteAsync(gql);
+        return res;
+    }
+
+    private static bool HasErrors(IExecutionResult result)
+    {
+        dynamic dyn = result;
+        var errs = dyn.Errors;
+        if (errs == null) return false;
+        var enumerable = errs as IEnumerable;
+        if (enumerable == null) return false;
+        foreach (var _ in enumerable) return true;
+        return false;
+    }
+
+    private static IReadOnlyDictionary<string, object?> DataDict(IExecutionResult result)
+    {
+        dynamic dyn = result;
+        return (IReadOnlyDictionary<string, object?>)dyn.Data!;
     }
 
     [Test]
@@ -57,8 +79,12 @@ public class GraphQLProvisioningTest : TestInMemory
             }}
         }}";
 
-        var doc = await ExecJson(mutation);
-        Assert.False(doc.RootElement.TryGetProperty("errors", out _));
+        var result = await Exec(mutation);
+        Assert.False(HasErrors(result), "GraphQL returned errors");
+
+        var data = DataDict(result);
+        var payload = (IReadOnlyDictionary<string, object?>)data["provisionOnLogin"]!;
+        Assert.That(payload["success"] is true, Is.True);
 
         // verify DB: user created and role BasicUser
         var user = Db.Users.Include(u => u.Role).FirstOrDefault(u => u.ExternalId == externalId);

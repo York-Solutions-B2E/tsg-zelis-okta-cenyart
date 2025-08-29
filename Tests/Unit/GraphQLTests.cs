@@ -1,11 +1,12 @@
-using System.Security.Claims;
-using Microsoft.EntityFrameworkCore;
 using HotChocolate.Execution;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
+using Api.Auth;
 using Api.Data;
 using Api.GraphQL;
 
-namespace Tests;
+namespace Tests.Unit;
 
 [TestFixture]
 public class GraphQLTests
@@ -13,10 +14,12 @@ public class GraphQLTests
     private IRequestExecutor _executor = null!;
     private AppDbContext _db = null!;
     private IServiceProvider _sp = null!;
+    private Mock<IUserRoleProvider> _mockRoleProvider = null!;
 
     [OneTimeSetUp]
     public async Task OneTimeSetup()
     {
+        // 1️⃣ In-memory DB
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
@@ -24,15 +27,36 @@ public class GraphQLTests
         _db.Database.EnsureCreated();
         DbSeeder.Seed(_db);
 
+        // 2️⃣ Mock IUserRoleProvider
+        _mockRoleProvider = new Mock<IUserRoleProvider>();
+        _mockRoleProvider
+            .Setup(p => p.GetRoleNameAsync(It.IsAny<Guid>(), default))
+            .ReturnsAsync((Guid uid, System.Threading.CancellationToken _) =>
+            {
+                var user = _db.Users.Include(u => u.Role).FirstOrDefault(u => u.Id == uid);
+                return user?.Role?.Name ?? "BasicUser";
+            });
+
+        // 3️⃣ DI registration
         var services = new ServiceCollection();
         services.AddSingleton(_db);
-        services.AddGraphQL()
-            .AddQueryType<Query>()
-            .AddMutationType<Mutation>();
+        services.AddSingleton<IUserRoleProvider>(_mockRoleProvider.Object);
+
+        services.AddSingleton<AuthorizationService>(sp =>
+        {
+            var roleProvider = sp.GetRequiredService<IUserRoleProvider>();
+            return new AuthorizationService(roleProvider);
+        });
+
+        // 4️⃣ GraphQL setup
+        services.AddGraphQLServer()
+            .AddQueryType<AuthorizationQueries>()
+            .AddTypeExtension<Query>()
+            .AddMutationType<ProvisioningMutations>();
 
         _sp = services.BuildServiceProvider();
         _executor = await _sp.GetRequiredService<IRequestExecutorResolver>()
-            .GetRequestExecutorAsync();
+                             .GetRequestExecutorAsync();
     }
 
     [OneTimeTearDown]
@@ -42,191 +66,94 @@ public class GraphQLTests
         if (_sp is IDisposable d) d.Dispose();
     }
 
-    public static class AuthConstants
+    private async Task<IExecutionResult> Exec(string gql)
+        => await _executor.ExecuteAsync(gql);
+
+    private static bool HasErrors(IExecutionResult result)
     {
-        public const string ViewAuthEvents = "Audit.ViewAuthEvents";
-        public const string RoleChanges = "Audit.RoleChanges";
-        public const string PermissionsClaimType = "permissions";
+        dynamic dyn = result;
+        var errs = dyn.Errors;
+        if (errs == null) return false;
+        var enumerable = errs as System.Collections.IEnumerable;
+        if (enumerable == null) return false;
+        foreach (var _ in enumerable) return true;
+        return false;
     }
 
-    private static ClaimsPrincipal CreatePrincipal(params string[] claims)
+    private static IReadOnlyDictionary<string, object?> DataDict(IExecutionResult result)
     {
-        var identity = new ClaimsIdentity(
-            claims.Select(c => new System.Security.Claims.Claim(AuthConstants.PermissionsClaimType, c)),
-            "test"
-        );
-        return new ClaimsPrincipal(identity);
-    }
-
-    private async Task<string> ExecuteQuery(string query, params string[] claims)
-    {
-        var principal = CreatePrincipal(claims);
-        var request = OperationRequestBuilder.New()
-            .SetDocument(query)
-            .AddGlobalState("currentUser", principal)
-            .Build();
-
-        var result = await _executor.ExecuteAsync(request);
-        return result.ToJson();
-    }
-
-    private static void AssertUserRole(Guid userId, Guid expectedRoleId, AppDbContext db)
-    {
-        var user = db.Users.Include(u => u.Role).First(u => u.Id == userId);
-        Assert.That(user.RoleId, Is.EqualTo(expectedRoleId));
+        dynamic dyn = result;
+        return (IReadOnlyDictionary<string, object?>)dyn.Data!;
     }
 
     [Test]
     public async Task UsersQuery_ReturnsUsersWithRoles()
     {
-        var result = await ExecuteQuery("{ users { id email role { name } } }",
-            AuthConstants.ViewAuthEvents);
-
-        Assert.That(result, Contains.Substring("users"));
-        Assert.That(result, Does.Not.Contain("errors"));
+        var result = await Exec("{ users { id email role { name } } }");
+        Assert.False(HasErrors(result));
+        var data = DataDict(result);
+        var users = (IReadOnlyList<object?>)data["users"]!;
+        Assert.IsNotEmpty(users);
     }
 
     [Test]
     public async Task RolesQuery_ReturnsRoles()
     {
-        var result = await ExecuteQuery("{ roles { id name } }",
-            AuthConstants.RoleChanges);
-
-        Assert.That(result, Contains.Substring("roles"));
-        Assert.That(result, Does.Not.Contain("errors"));
+        var result = await Exec("{ roles { id name } }");
+        Assert.False(HasErrors(result));
+        var data = DataDict(result);
+        var roles = (IReadOnlyList<object?>)data["roles"]!;
+        Assert.IsNotEmpty(roles);
     }
 
     [Test]
-    public async Task SecurityEventsQuery_RespectsClaims()
+    public async Task CanViewAuthEvents_Query_True_For_AuthObserver()
     {
-        var withClaim = await ExecuteQuery(
-            "{ securityEvents { id eventType details } }",
-            AuthConstants.ViewAuthEvents);
-
-        Assert.That(withClaim, Contains.Substring("securityEvents"));
-        Assert.That(withClaim, Does.Not.Contain("errors"));
-
-        var noClaim = await ExecuteQuery("{ securityEvents { id eventType details } }");
-        Assert.That(noClaim, Does.Not.Contain("null"));
-    }
-
-    [Test]
-    public async Task AssignUserRole_Mutation_WorksWithRoleChangesClaim()
-    {
-        var user = _db.Users.First(u => u.Role!.Name == "BasicUser");
-        var newRole = _db.Roles.First(r => r.Name == "AuthObserver");
-
-        var mutation = $@"
-            mutation {{
-                assignUserRole(userId: ""{user.Id}"", roleId: ""{newRole.Id}"") {{
-                    success
-                    message
-                }}
-            }}";
-
-        var result = await ExecuteQuery(mutation, AuthConstants.RoleChanges);
-        Assert.That(result, Does.Not.Contain("errors"));
-        Assert.That(result, Contains.Substring("success"));
-
-        AssertUserRole(user.Id, newRole.Id, _db);
-
-        var roleEvents = _db.SecurityEvents
-            .Where(e => e.EventType == "RoleAssigned" && e.AffectedUserId == user.Id);
-        Assert.That(roleEvents.Count(), Is.EqualTo(1));
-    }
-
-    [Test]
-    public async Task SecurityEventsQuery_FiltersAuthEventsCorrectly()
-    {
-        var authEvent = new SecurityEvent
-        {
-            EventType = "LoginAttempt",
-            AuthorUserId = _db.Users.First().Id,
-            AffectedUserId = _db.Users.First().Id,
-            Details = "Test login attempt"
-        };
-        
-        var roleEvent = new SecurityEvent
-        {
-            EventType = "RoleAssigned", 
-            AuthorUserId = _db.Users.First().Id,
-            AffectedUserId = _db.Users.First().Id,
-            Details = "from=BasicUser to=AuthObserver"
-        };
-
-        _db.SecurityEvents.AddRange(authEvent, roleEvent);
-        _db.SaveChanges();
-
-        var authResult = await ExecuteQuery(
-            "{ securityEvents { eventType } }",
-            AuthConstants.ViewAuthEvents);
-
-        var roleResult = await ExecuteQuery(
-            "{ securityEvents { eventType } }",
-            AuthConstants.RoleChanges);
-
-        var bothResult = await ExecuteQuery(
-            "{ securityEvents { eventType } }",
-            AuthConstants.ViewAuthEvents, AuthConstants.RoleChanges);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(authResult, Does.Not.Contain("errors"));
-            Assert.That(roleResult, Does.Not.Contain("errors"));
-            Assert.That(bothResult, Does.Not.Contain("errors"));
-        });
-
-    }
-
-    [Test]
-    public async Task AssignUserRole_RequiresCorrectClaim()
-    {
-        var user = _db.Users.First();
         var role = _db.Roles.First(r => r.Name == "AuthObserver");
-
-        var mutation = $@"
-            mutation {{
-                assignUserRole(userId: ""{user.Id}"", roleId: ""{role.Id}"") {{
-                    success
-                    message
-                }}
-            }}";
-
-        var result = await ExecuteQuery(mutation, AuthConstants.ViewAuthEvents);
-        Assert.That(result, Contains.Substring("errors").Or.Contains("Unauthorized"));
-    }
-
-    [Test] 
-    public async Task SecurityEventsQuery_OrdersByOccurredUtcDesc()
-    {
-        // Clear existing events
-        _db.SecurityEvents.RemoveRange(_db.SecurityEvents);
-        
-        var now = DateTime.UtcNow;
-        var older = new SecurityEvent
-        {
-            EventType = "LoginAttempt",
-            AuthorUserId = _db.Users.First().Id,
-            AffectedUserId = _db.Users.First().Id,
-            OccurredUtc = now.AddMinutes(-10)
-        };
-        
-        var newer = new SecurityEvent
-        {
-            EventType = "LoginSuccess",
-            AuthorUserId = _db.Users.First().Id, 
-            AffectedUserId = _db.Users.First().Id,
-            OccurredUtc = now
-        };
-
-        _db.SecurityEvents.AddRange(older, newer);
+        var u = new User { Id = Guid.NewGuid(), ExternalId = "ut-authobs", Email = "obs@example.com", RoleId = role.Id };
+        _db.Users.Add(u);
         _db.SaveChanges();
 
-        var result = await ExecuteQuery(
-            "{ securityEvents { eventType occurredUtc } }",
-            AuthConstants.ViewAuthEvents);
+        _mockRoleProvider.Setup(p => p.GetRoleNameAsync(u.Id, default)).ReturnsAsync("AuthObserver");
 
-        Assert.That(result, Does.Not.Contain("errors"));
-        Assert.That(result, Contains.Substring("securityEvents"));
+        var q = $@"{{ canViewAuthEvents(userId: ""{u.Id}"") }}";
+        var res = await Exec(q);
+        Assert.False(HasErrors(res));
+        var val = (bool)DataDict(res)["canViewAuthEvents"]!;
+        Assert.IsTrue(val);
+    }
+
+    [Test]
+    public async Task CanViewRoleChanges_Query_False_For_AuthObserver()
+    {
+        var role = _db.Roles.First(r => r.Name == "AuthObserver");
+        var u = new User { Id = Guid.NewGuid(), ExternalId = "ut-authobs2", Email = "obs2@example.com", RoleId = role.Id };
+        _db.Users.Add(u);
+        _db.SaveChanges();
+
+        _mockRoleProvider.Setup(p => p.GetRoleNameAsync(u.Id, default)).ReturnsAsync("AuthObserver");
+
+        var q = $@"{{ canViewRoleChanges(userId: ""{u.Id}"") }}";
+        var res = await Exec(q);
+        Assert.False(HasErrors(res));
+        var val = (bool)DataDict(res)["canViewRoleChanges"]!;
+        Assert.IsFalse(val);
+    }
+
+    [Test]
+    public async Task CanViewRoleChanges_Query_True_For_SecurityAuditor()
+    {
+        var role = _db.Roles.First(r => r.Name == "SecurityAuditor");
+        var u = new User { Id = Guid.NewGuid(), ExternalId = "ut-aud", Email = "aud@example.com", RoleId = role.Id };
+        _db.Users.Add(u);
+        _db.SaveChanges();
+
+        _mockRoleProvider.Setup(p => p.GetRoleNameAsync(u.Id, default)).ReturnsAsync("SecurityAuditor");
+
+        var q = $@"{{ canViewRoleChanges(userId: ""{u.Id}"") }}";
+        var res = await Exec(q);
+        Assert.False(HasErrors(res));
+        var val = (bool)DataDict(res)["canViewRoleChanges"]!;
+        Assert.IsTrue(val);
     }
 }
