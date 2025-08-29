@@ -1,9 +1,12 @@
+using System;
 using System.Text.Json;
+using System.Threading.Tasks;
 using HotChocolate.Execution;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Api.Auth;
 using Api.GraphQL;
+using NUnit.Framework;
 
 namespace Tests.Unit;
 
@@ -12,33 +15,80 @@ public class GraphQLAuthTests
 {
     private IRequestExecutor _executor = null!;
 
+    // --- Error helpers using JSON from the execution result ---
+    private static bool HasErrors(IExecutionResult result)
+    {
+        var json = result.ToJson();
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0;
+    }
+
+    private static string GetErrors(IExecutionResult result)
+    {
+        var json = result.ToJson();
+        using var doc = JsonDocument.Parse(json);
+
+        if (doc.RootElement.TryGetProperty("errors", out var errors))
+        {
+            return errors.ToString();
+        }
+
+        return string.Empty;
+    }
+
+    private static void PrintErrors(IExecutionResult result)
+    {
+        var errors = GetErrors(result);
+        if (!string.IsNullOrEmpty(errors))
+        {
+            Console.Error.WriteLine("GraphQL errors: " + errors);
+        }
+    }
+
     private static async Task<JsonDocument> ExecJsonAsync(IRequestExecutor executor, string gql)
     {
         IExecutionResult result = await executor.ExecuteAsync(gql);
+        PrintErrors(result);
+        return JsonDocument.Parse(result.ToJson());
+    }
 
-        // Convert to JsonDocument via ToJson()
-        string json = result.ToJson();
-        return JsonDocument.Parse(json);
+    private static async Task<IRequestExecutor> BuildExecutorAsync(Mock<IUserRoleProvider> mockProvider)
+    {
+        var services = new ServiceCollection();
+
+        services.AddSingleton<IUserRoleProvider>(mockProvider.Object);
+        services.AddSingleton<AuthorizationService>();
+
+        // Register Query in DI
+        services.AddScoped<Query>();
+
+        services.AddGraphQLServer()
+                .AddQueryType<Query>()
+                .AddTypeExtension<AuthorizationQueries>();
+
+        var sp = services.BuildServiceProvider();
+        return await sp.GetRequiredService<IRequestExecutorResolver>()
+                       .GetRequestExecutorAsync();
+    }
+
+    [SetUp]
+    public async Task SetupExecutor()
+    {
+        var mockProvider = new Mock<IUserRoleProvider>();
+        mockProvider.Setup(p => p.GetRoleNameAsync(It.IsAny<Guid>(), default))
+                    .ReturnsAsync((Guid id, System.Threading.CancellationToken _) => "BasicUser");
+
+        _executor = await BuildExecutorAsync(mockProvider);
     }
 
     [Test]
     public async Task CanViewAuthEvents_Query_True_For_AuthObserver()
     {
         var userId = Guid.NewGuid();
-
-        // Mock IUserRoleProvider to return "AuthObserver"
         var mockProvider = new Mock<IUserRoleProvider>();
         mockProvider.Setup(p => p.GetRoleNameAsync(userId, default)).ReturnsAsync("AuthObserver");
 
-        // Compose DI
-        var services = new ServiceCollection();
-        services.AddSingleton<IUserRoleProvider>(mockProvider.Object);
-        services.AddSingleton<AuthorizationService>();
-        services.AddGraphQLServer()
-            .AddQueryType<AuthorizationQueries>();
-
-        var sp = services.BuildServiceProvider();
-        _executor = await sp.GetRequiredService<IRequestExecutorResolver>().GetRequestExecutorAsync();
+        _executor = await BuildExecutorAsync(mockProvider);
 
         var gql = $@"{{ canViewAuthEvents(userId: ""{userId}"") }}";
         var doc = await ExecJsonAsync(_executor, gql);
@@ -52,18 +102,10 @@ public class GraphQLAuthTests
     public async Task CanViewRoleChanges_Query_False_For_AuthObserver()
     {
         var userId = Guid.NewGuid();
-
         var mockProvider = new Mock<IUserRoleProvider>();
         mockProvider.Setup(p => p.GetRoleNameAsync(userId, default)).ReturnsAsync("AuthObserver");
 
-        var services = new ServiceCollection();
-        services.AddSingleton<IUserRoleProvider>(mockProvider.Object);
-        services.AddSingleton<AuthorizationService>();
-        services.AddGraphQLServer()
-            .AddQueryType<AuthorizationQueries>();
-
-        var sp = services.BuildServiceProvider();
-        _executor = await sp.GetRequiredService<IRequestExecutorResolver>().GetRequestExecutorAsync();
+        _executor = await BuildExecutorAsync(mockProvider);
 
         var gql = $@"{{ canViewRoleChanges(userId: ""{userId}"") }}";
         var doc = await ExecJsonAsync(_executor, gql);
@@ -77,18 +119,10 @@ public class GraphQLAuthTests
     public async Task CanViewRoleChanges_Query_True_For_SecurityAuditor()
     {
         var userId = Guid.NewGuid();
-
         var mockProvider = new Mock<IUserRoleProvider>();
         mockProvider.Setup(p => p.GetRoleNameAsync(userId, default)).ReturnsAsync("SecurityAuditor");
 
-        var services = new ServiceCollection();
-        services.AddSingleton<IUserRoleProvider>(mockProvider.Object);
-        services.AddSingleton<AuthorizationService>();
-        services.AddGraphQLServer()
-            .AddQueryType<AuthorizationQueries>();
-
-        var sp = services.BuildServiceProvider();
-        _executor = await sp.GetRequiredService<IRequestExecutorResolver>().GetRequestExecutorAsync();
+        _executor = await BuildExecutorAsync(mockProvider);
 
         var gql = $@"{{ canViewRoleChanges(userId: ""{userId}"") }}";
         var doc = await ExecJsonAsync(_executor, gql);

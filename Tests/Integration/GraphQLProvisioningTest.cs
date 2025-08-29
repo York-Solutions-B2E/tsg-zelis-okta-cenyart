@@ -33,8 +33,9 @@ public class GraphQLProvisioningTest : TestInMemory
 
         // register GraphQL pieces
         services.AddGraphQLServer()
-            .AddMutationType<ProvisioningMutations>()
-            .AddQueryType<AuthorizationQueries>();
+                .AddQueryType<Query>()
+                .AddTypeExtension<AuthorizationQueries>()
+                .AddMutationType<ProvisioningMutations>();
 
         var sp = services.BuildServiceProvider();
         _executor = await sp.GetRequiredService<IRequestExecutorResolver>().GetRequestExecutorAsync();

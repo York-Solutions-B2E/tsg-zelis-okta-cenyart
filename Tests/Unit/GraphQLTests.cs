@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HotChocolate.Execution;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -49,10 +50,11 @@ public class GraphQLTests
         });
 
         // 4️⃣ GraphQL setup
+        // Register Query as the root query, then add AuthorizationQueries as an extension.
         services.AddGraphQLServer()
-            .AddQueryType<AuthorizationQueries>()
-            .AddTypeExtension<Query>()
-            .AddMutationType<ProvisioningMutations>();
+                .AddQueryType<Query>()                 // root Query: users, roles, securityEvents
+                .AddTypeExtension<AuthorizationQueries>() // extension: canViewAuthEvents, canViewRoleChanges
+                .AddMutationType<ProvisioningMutations>();
 
         _sp = services.BuildServiceProvider();
         _executor = await _sp.GetRequiredService<IRequestExecutorResolver>()
@@ -69,15 +71,36 @@ public class GraphQLTests
     private async Task<IExecutionResult> Exec(string gql)
         => await _executor.ExecuteAsync(gql);
 
+    // --- Error helpers using JSON from the execution result ---
+
     private static bool HasErrors(IExecutionResult result)
     {
-        dynamic dyn = result;
-        var errs = dyn.Errors;
-        if (errs == null) return false;
-        var enumerable = errs as System.Collections.IEnumerable;
-        if (enumerable == null) return false;
-        foreach (var _ in enumerable) return true;
-        return false;
+        var json = result.ToJson();
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0;
+    }
+
+    private static string GetErrors(IExecutionResult result)
+    {
+        var json = result.ToJson();
+        using var doc = JsonDocument.Parse(json);
+
+        if (doc.RootElement.TryGetProperty("errors", out var errors))
+        {
+            // return pretty errors JSON (compact)
+            return errors.ToString();
+        }
+
+        return string.Empty;
+    }
+
+    private static void PrintErrors(IExecutionResult result)
+    {
+        var errors = GetErrors(result);
+        if (!string.IsNullOrEmpty(errors))
+        {
+            Console.Error.WriteLine("GraphQL errors: " + errors);
+        }
     }
 
     private static IReadOnlyDictionary<string, object?> DataDict(IExecutionResult result)
@@ -90,7 +113,9 @@ public class GraphQLTests
     public async Task UsersQuery_ReturnsUsersWithRoles()
     {
         var result = await Exec("{ users { id email role { name } } }");
-        Assert.False(HasErrors(result));
+        if (HasErrors(result)) PrintErrors(result);
+        Assert.False(HasErrors(result), "GraphQL returned errors: " + GetErrors(result));
+
         var data = DataDict(result);
         var users = (IReadOnlyList<object?>)data["users"]!;
         Assert.IsNotEmpty(users);
@@ -100,7 +125,9 @@ public class GraphQLTests
     public async Task RolesQuery_ReturnsRoles()
     {
         var result = await Exec("{ roles { id name } }");
-        Assert.False(HasErrors(result));
+        if (HasErrors(result)) PrintErrors(result);
+        Assert.False(HasErrors(result), "GraphQL returned errors: " + GetErrors(result));
+
         var data = DataDict(result);
         var roles = (IReadOnlyList<object?>)data["roles"]!;
         Assert.IsNotEmpty(roles);
@@ -118,7 +145,9 @@ public class GraphQLTests
 
         var q = $@"{{ canViewAuthEvents(userId: ""{u.Id}"") }}";
         var res = await Exec(q);
-        Assert.False(HasErrors(res));
+        if (HasErrors(res)) PrintErrors(res);
+        Assert.False(HasErrors(res), "GraphQL returned errors: " + GetErrors(res));
+
         var val = (bool)DataDict(res)["canViewAuthEvents"]!;
         Assert.IsTrue(val);
     }
@@ -135,7 +164,9 @@ public class GraphQLTests
 
         var q = $@"{{ canViewRoleChanges(userId: ""{u.Id}"") }}";
         var res = await Exec(q);
-        Assert.False(HasErrors(res));
+        if (HasErrors(res)) PrintErrors(res);
+        Assert.False(HasErrors(res), "GraphQL returned errors: " + GetErrors(res));
+
         var val = (bool)DataDict(res)["canViewRoleChanges"]!;
         Assert.IsFalse(val);
     }
@@ -152,7 +183,9 @@ public class GraphQLTests
 
         var q = $@"{{ canViewRoleChanges(userId: ""{u.Id}"") }}";
         var res = await Exec(q);
-        Assert.False(HasErrors(res));
+        if (HasErrors(res)) PrintErrors(res);
+        Assert.False(HasErrors(res), "GraphQL returned errors: " + GetErrors(res));
+
         var val = (bool)DataDict(res)["canViewRoleChanges"]!;
         Assert.IsTrue(val);
     }

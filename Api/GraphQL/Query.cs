@@ -4,9 +4,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Api.GraphQL;
 
-// Authorization-related queries
+// Mark this class as an extension of the root Query type
+[ExtendObjectType("Query")]
 public class AuthorizationQueries
 {
+    // GraphQL: canViewAuthEvents(userId: ID!): Boolean!
     public async Task<bool> CanViewAuthEventsAsync(
         Guid userId,
         [Service] AuthorizationService authorization)
@@ -14,6 +16,7 @@ public class AuthorizationQueries
         return await authorization.CanViewAuthEventsAsync(userId);
     }
 
+    // GraphQL: canViewRoleChanges(userId: ID!): Boolean!
     public async Task<bool> CanViewRoleChangesAsync(
         Guid userId,
         [Service] AuthorizationService authorization)
