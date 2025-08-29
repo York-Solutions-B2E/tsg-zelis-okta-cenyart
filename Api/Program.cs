@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Api.Data;
+using Api.GraphQL;
+using Api.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +20,12 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// ---------------- DI ----------------
+builder.Services
+    .AddScoped<IUserRoleProvider, EfUserRoleProvider>()
+    .AddScoped<AuthorizationService>()
+    .AddScoped<ProvisioningService>();
+
 // ---------------- Build app ----------------
 var app = builder.Build();
 
@@ -32,6 +40,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+// ---------------- GraphQL ----------------
+builder.Services
+    .AddGraphQLServer()
+    .AddQueryType<AuthorizationQueries>()
+    .AddMutationType<ProvisioningMutations>();
 
 app.UseHttpsRedirection();
 

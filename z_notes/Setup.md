@@ -58,11 +58,17 @@ dotnet user-secrets list --project Api
 dotnet add package Microsoft.EntityFrameworkCore --project Api
 dotnet add package Microsoft.EntityFrameworkCore.Design --project Api
 dotnet add package Microsoft.EntityFrameworkCore.SqlServer --project Api
-
+dotnet add package HotChocolate.AspNetCore --project Api
+dotnet add package HotChocolate.Data --project Api
+dotnet add package HotChocolate.Execution --project Api
+dotnet add package HotChocolate.Types --project Api
 
 // Tests
 dotnet add package FluentAssertions --project Tests
-dotnet add Tests/WebApi.Tests package Microsoft.EntityFrameworkCore.InMemory --project Tests
+dotnet add package Microsoft.EntityFrameworkCore.InMemory --project Tests
+dotnet add package HotChocolate.AspNetCore --project Tests
+dotnet add package HotChocolate.Execution --project Tests
+dotnet add package Moq --project Tests
 ```
 
 ```bash

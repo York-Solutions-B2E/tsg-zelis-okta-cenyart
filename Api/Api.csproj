@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="HotChocolate.AspNetCore" Version="15.1.9" />
+    <PackageReference Include="HotChocolate.Data" Version="15.1.9" />
+    <PackageReference Include="HotChocolate.Execution" Version="15.1.9" />
+    <PackageReference Include="HotChocolate.Types" Version="15.1.9" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="8.0.18" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.8">

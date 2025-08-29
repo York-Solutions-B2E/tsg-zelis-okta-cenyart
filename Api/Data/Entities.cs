@@ -30,8 +30,8 @@ public class Role
     [MaxLength(200)]
     public string? Description { get; set; }
 
-    public ICollection<User> Users { get; set; } = new List<User>();
-    public ICollection<Claim> Claims { get; set; } = new List<Claim>();
+    public ICollection<User> Users { get; set; } = [];
+    public ICollection<Claim> Claims { get; set; } = [];
 }
 
 public class Claim
@@ -45,7 +45,7 @@ public class Claim
     [Required, MaxLength(200)]
     public string Value { get; set; } = null!;
 
-    public ICollection<Role> Roles { get; set; } = new List<Role>();
+    public ICollection<Role> Roles { get; set; } = [];
 }
 
 public class SecurityEvent

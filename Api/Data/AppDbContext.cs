@@ -31,13 +31,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         {
             b.HasOne(e => e.AuthorUser)
                 .WithMany()
-                .HasForeignKey(e => e.AuthorUserId)
-                .OnDelete(DeleteBehavior.NoAction);
+                .HasForeignKey(e => e.AuthorUserId);
 
             b.HasOne(e => e.AffectedUser)
                 .WithMany()
-                .HasForeignKey(e => e.AffectedUserId)
-                .OnDelete(DeleteBehavior.NoAction);
+                .HasForeignKey(e => e.AffectedUserId);
         });
     }
 }

@@ -1,9 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Api.Data;
 
-namespace Tests;
+namespace Tests.Integration;
 
-public abstract class TestBase
+public abstract class TestInMemory
 {
     protected AppDbContext Db { get; private set; }
 
