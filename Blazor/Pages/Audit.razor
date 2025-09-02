@@ -1,0 +1,96 @@
+@page "/audit"
+@using Shared
+@inject Blazor.Services.GraphQLService Gql
+
+<h3>Security Audit Dashboard</h3>
+
+<div class="row">
+    <div class="col-md-6">
+        <h5>Auth Events</h5>
+        @if (!CanViewAuthEvents)
+        {
+            <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
+        }
+        else if (AuthEvents is null)
+        {
+            <p><em>Loading…</em></p>
+        }
+        else
+        {
+            <table class="table table-sm table-hover">
+                <thead><tr><th>Timestamp</th><th>Author</th><th>Event</th><th>Details</th></tr></thead>
+                <tbody>
+                    @foreach (var e in AuthEvents)
+                    {
+                        <tr>
+                            <td>@e.OccurredUtc.ToString("u")</td>
+                            <td>@e.AuthorUserId</td>
+                            <td>@e.EventType</td>
+                            <td>@e.Details</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+
+    <div class="col-md-6">
+        <h5>Role Changes</h5>
+        @if (!CanViewRoleChanges)
+        {
+            <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
+        }
+        else if (RoleEvents is null)
+        {
+            <p><em>Loading…</em></p>
+        }
+        else
+        {
+            <table class="table table-sm table-hover">
+                <thead><tr><th>Timestamp</th><th>Actor->Target</th><th>Event</th><th>Details</th></tr></thead>
+                <tbody>
+                    @foreach (var e in RoleEvents)
+                    {
+                        <tr>
+                            <td>@e.OccurredUtc.ToString("u")</td>
+                            <td>@e.AuthorUserId -> @e.AffectedUserId</td>
+                            <td>@e.EventType</td>
+                            <td>@e.Details</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+@code {
+    private List<SecurityEventDto>? AuthEvents;
+    private List<SecurityEventDto>? RoleEvents;
+    private bool CanViewAuthEvents;
+    private bool CanViewRoleChanges;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // check permissions (server determines by JWT sent by AccessTokenHandler)
+        try
+        {
+            CanViewAuthEvents = await Gql.CanViewAuthEventsAsync();
+            CanViewRoleChanges = await Gql.CanViewRoleChangesAsync();
+
+            if (CanViewAuthEvents || CanViewRoleChanges)
+            {
+                var events = await Gql.GetSecurityEventsAsync();
+                AuthEvents = events.Where(e => e.EventType.StartsWith("Login")).ToList();
+                RoleEvents = events.Where(e => e.EventType == "RoleAssigned").ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            // log or show friendly message
+            Console.Error.WriteLine("Audit load error: " + ex.Message);
+            CanViewAuthEvents = false;
+            CanViewRoleChanges = false;
+        }
+    }
+}

@@ -62,6 +62,8 @@ dotnet add package HotChocolate.AspNetCore --project Api
 dotnet add package HotChocolate.Data --project Api
 dotnet add package HotChocolate.Execution --project Api
 dotnet add package HotChocolate.Types --project Api
+dotnet add package HotChocolate.AspNetCore.Authorization --project Api
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer --version 8.0 --project Api
 
 // Tests
 dotnet add package FluentAssertions --project Tests
@@ -69,6 +71,13 @@ dotnet add package Microsoft.EntityFrameworkCore.InMemory --project Tests
 dotnet add package HotChocolate.AspNetCore --project Tests
 dotnet add package HotChocolate.Execution --project Tests
 dotnet add package Moq --project Tests
+
+// Blazor
+dotnet add package Okta.AspNetCore --project Blazor
+dotnet add package Microsoft.AspNetCore --project Blazor
+dotnet add package Microsoft.AspNetCore.Authentication.OpenIdConnect --version 8.0.19 --project Blazor
+dotnet add package Microsoft.AspNetCore.Authentication.Cookies --project Blazor
+dotnet add package System.IdentityModel.Tokens.Jwt --project Blazor
 ```
 
 ```bash

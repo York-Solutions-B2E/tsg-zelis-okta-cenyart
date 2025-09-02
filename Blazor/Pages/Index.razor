@@ -1,0 +1,13 @@
+@page "/"
+@using Microsoft.AspNetCore.Components.Authorization
+
+<h3>Welcome</h3>
+
+<p>
+    Use one of the following to sign in:
+</p>
+
+<div class="d-flex gap-3">
+    <a class="btn btn-primary" href="Account/OktaSignIn">Sign in with Okta</a>
+    <a class="btn btn-secondary" href="Account/OtherSignIn">Sign in with Other</a>
+</div>
