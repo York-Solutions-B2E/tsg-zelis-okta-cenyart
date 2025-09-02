@@ -1,25 +1,28 @@
 using Api.Auth;
 using Api.Data;
+using Api.Services;
 using Microsoft.EntityFrameworkCore;
+using Shared;
 
 namespace Api.GraphQL;
 
 // Provisioning mutations
+[ExtendObjectType("Mutation")]
 public class ProvisioningMutations
 {
-    public async Task<ProvisionResult> ProvisionOnLoginAsync(
+    /// <summary>
+    /// provisionOnLogin(externalId, email, provider): String!
+    /// Returns a signed JWT token (string).
+    /// </summary>
+    public async Task<string> ProvisionOnLoginAsync(
         string externalId,
         string email,
         string provider,
         [Service] ProvisioningService provisioning,
-        [Service] AppDbContext db)
+        CancellationToken ct = default)
     {
-        var user = await provisioning.ProvisionOnLoginAsync(externalId, email, provider);
-
-        await db.Entry(user).Reference(u => u.Role).LoadAsync();
-
-        var userDto = new UserDto(user.Id, user.Email, new RoleDto(user.Role.Id, user.Role.Name));
-        return new ProvisionResult(true, "Provisioned", userDto);
+        var token = await provisioning.ProvisionAndIssueTokenAsync(externalId, email, provider, ct);
+        return token;
     }
 }
 
