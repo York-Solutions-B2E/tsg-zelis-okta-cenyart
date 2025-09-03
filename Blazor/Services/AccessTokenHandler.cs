@@ -3,6 +3,10 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Blazor.Services;
 
+/// <summary>
+/// DelegatingHandler that attaches the JWT stored in the cookie authentication tokens
+/// as the Authorization: Bearer {token} header to outgoing requests.
+/// </summary>
 public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
 {
     private readonly IHttpContextAccessor _ctx = ctx;
@@ -12,11 +16,17 @@ public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
         var httpContext = _ctx.HttpContext;
         if (httpContext != null)
         {
-            // read the access_token saved in cookie auth properties during provisioning
-            var token = await httpContext.GetTokenAsync("access_token");
-            if (!string.IsNullOrWhiteSpace(token))
+            // read tokens stored on cookie auth properties
+            var authResult = await httpContext.AuthenticateAsync();
+            var props = authResult.Properties;
+            if (props != null)
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                var tokens = props.GetTokens();
+                var access = tokens?.FirstOrDefault(t => string.Equals(t.Name, "access_token", StringComparison.OrdinalIgnoreCase))?.Value;
+                if (!string.IsNullOrWhiteSpace(access))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access);
+                }
             }
         }
 

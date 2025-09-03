@@ -1,39 +1,21 @@
-using Microsoft.EntityFrameworkCore;
-using Api.Data;
-using Api.GraphQL;
-using Api.Auth;
+using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
+using Api.Data;
+using Api.GraphQL;
+using Microsoft.EntityFrameworkCore;
 using Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------------- User Secrets ----------------
-if (builder.Environment.IsDevelopment())
-{
-    builder.Configuration.AddUserSecrets<Program>();
-}
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "https://example.local";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "api";
+var jwtKey = builder.Configuration["Jwt:Key"] ?? "very-long-secret-key-change-this";
 
-// ---------------- Database ----------------
-var sqlConnectionString = builder.Configuration.GetConnectionString("ZelisOkta")
-        ?? throw new InvalidOperationException("Missing SQL Server connection string: 'ZelisOkta'");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(sqlConnectionString));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-
-// ---------------- DI ----------------
-builder.Services
-    .AddScoped<IUserRoleProvider, EfUserRoleProvider>()
-    .AddScoped<AuthorizationService>()
-    .AddScoped<ProvisioningService>()
-    .AddScoped<TokenService>();
-
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "replace-with-very-long-secret-in-prod";
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "api";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "client";
+// Authentication - JWT bearer
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -48,38 +30,37 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtIssuer,
         ValidAudience = jwtAudience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+        NameClaimType = "uid"
     };
 });
 
+// Authorization policies
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("CanViewAuthEvents", p => p.RequireClaim("permissions", "Audit.ViewAuthEvents"))
     .AddPolicy("CanViewRoleChanges", p => p.RequireClaim("permissions", "Audit.RoleChanges"));
 
-// ---------------- GraphQL ----------------
+// Register services used by GraphQL resolvers
+builder.Services
+    .AddScoped<ProvisioningService>()
+    .AddScoped<RoleService>()
+    .AddScoped<SecurityEventService>();
+
+// HotChocolate GraphQL
 builder.Services
     .AddGraphQLServer()
-    .AddAuthorization() // enable HotChocolate auth integration
-    .AddMutationType(d => d.Name("Mutation")) // root mutation type
-    .AddType<ProvisioningMutations>()
-    .AddQueryType(d => d.Name("Query"))
-    .AddTypeExtension<AuthorizationQueries>();
+    .AddAuthorization()
+    .AddQueryType<Query>()
+    .AddMutationType<Mutation>()
+    .AddTypeExtension<ProvisioningMutations>();
 
-// ---------------- Build app ----------------
 var app = builder.Build();
 
-// ---------------- DB Migrations ----------------
-using var scope = app.Services.CreateScope();
-var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-db.Database.Migrate();
-DbSeeder.Seed(db);
+app.UseRouting();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+app.UseAuthentication();
+app.UseAuthorization();
 
-app.UseHttpsRedirection();
+app.MapGraphQL("/graphql");
 
 app.Run();

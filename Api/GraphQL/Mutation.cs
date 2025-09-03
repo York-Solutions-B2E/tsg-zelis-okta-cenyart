@@ -1,72 +1,59 @@
-using Api.Auth;
 using Api.Data;
 using Api.Services;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
 using Shared;
 
 namespace Api.GraphQL;
 
-// Provisioning mutations
 [ExtendObjectType("Mutation")]
-public class ProvisioningMutations
+public class ProvisioningMutations(ProvisioningService prov)
 {
-    /// <summary>
-    /// provisionOnLogin(externalId, email, provider): String!
-    /// Returns a signed JWT token (string).
-    /// </summary>
-    public async Task<string> ProvisionOnLoginAsync(
-        string externalId,
-        string email,
-        string provider,
-        [Service] ProvisioningService provisioning,
-        CancellationToken ct = default)
+    private readonly ProvisioningService _prov = prov;
+
+    public async Task<string> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
     {
-        var token = await provisioning.ProvisionAndIssueTokenAsync(externalId, email, provider, ct);
-        return token;
+        return await _prov.ProvisionOnLoginAsync(externalId, email, provider, ct);
     }
 }
 
-// General mutations
-public class Mutation(AppDbContext db)
+[ExtendObjectType("Mutation")]
+public class Mutation(IHttpContextAccessor http, SecurityEventService events, RoleService roles)
 {
-    private readonly AppDbContext _db = db;
+    private readonly IHttpContextAccessor _http = http;
+    private readonly SecurityEventService _events = events;
+    private readonly RoleService _roles = roles;
 
-    // Assign role to user with audit event
-    public async Task<User?> AssignUserRole(Guid userId, Guid roleId, [Service] AuthorizationService auth)
+    [Authorize]
+    public async Task<SecurityEvent> AddSecurityEventAsync(string eventType, Guid affectedUserId, string? details = null, CancellationToken ct = default)
     {
-        var user = await _db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
-        if (user == null) return null;
-
-        if (!await auth.CanViewRoleChangesAsync(userId))
-            throw new Exception("Unauthorized");
-
-        var oldRoleName = user.Role?.Name ?? "Unknown";
-        var newRole = await _db.Roles.FirstAsync(r => r.Id == roleId);
-
-        user.RoleId = roleId;
-        await _db.SaveChangesAsync();
-
-        _db.SecurityEvents.Add(new SecurityEvent
-        {
-            Id = Guid.NewGuid(),
-            EventType = "RoleAssigned",
-            AuthorUserId = userId,
-            AffectedUserId = userId,
-            Details = $"from={oldRoleName} to={newRole.Name}",
-            OccurredUtc = DateTime.UtcNow
-        });
-        await _db.SaveChangesAsync();
-
-        return user;
+        var authorUserId = GetUserIdFromClaims();
+        return await _events.CreateEventAsync(eventType, authorUserId, affectedUserId, details, ct);
     }
 
-    // Add arbitrary security event
-    public async Task<SecurityEvent> AddSecurityEvent(SecurityEvent input)
+    [Authorize(Policy = "CanViewRoleChanges")]
+    public async Task<AssignRoleResultDto> AssignUserRoleAsync(Guid userId, Guid roleId, CancellationToken ct = default)
     {
-        input.Id = Guid.NewGuid();
-        input.OccurredUtc = DateTime.UtcNow;
-        _db.SecurityEvents.Add(input);
-        await _db.SaveChangesAsync();
-        return input;
+        var authorUserId = GetUserIdFromClaims();
+
+        var (success, message, oldRole, newRole) = await _roles.UpdateUserRoleAsync(userId, roleId, ct);
+        if (!success)
+            throw new GraphQLException(message);
+
+        // Add RoleAssigned event after successful update
+        await _events.CreateRoleAssignedAsync(authorUserId, userId, oldRole, newRole, ct);
+
+        return new AssignRoleResultDto(true, message);
+    }
+
+    private Guid GetUserIdFromClaims()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+            throw new GraphQLException("Unauthenticated");
+
+        if (!Guid.TryParse(user.FindFirst("uid")?.Value, out var id))
+            throw new GraphQLException("Invalid uid claim in token");
+
+        return id;
     }
 }
