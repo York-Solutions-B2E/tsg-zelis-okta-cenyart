@@ -44,7 +44,7 @@ builder.Services.AddAuthentication(options =>
 .AddCookie()
 .AddOpenIdConnect("Okta", options =>
 {
-    options.Authority = builder.Configuration["Okta:OktaDomain"];
+    options.Authority = builder.Configuration["Okta:OktaDomain"] ?? "https://integrator-7281285.okta.com";
     options.ClientId = builder.Configuration["Okta:ClientId"];
     options.ClientSecret = builder.Configuration["Okta:ClientSecret"];
     options.ResponseType = OpenIdConnectResponseType.Code;

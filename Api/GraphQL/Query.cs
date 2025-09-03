@@ -1,55 +1,43 @@
-using Api.Auth;
-using Api.Data;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Api.Data;
 
 namespace Api.GraphQL;
 
-// Mark this class as an extension of the root Query type
-[ExtendObjectType("Query")]
-public class AuthorizationQueries
-{
-    // GraphQL: canViewAuthEvents(userId: ID!): Boolean!
-    public async Task<bool> CanViewAuthEventsAsync(
-        Guid userId,
-        [Service] AuthorizationService authorization)
-    {
-        return await authorization.CanViewAuthEventsAsync(userId);
-    }
-
-    // GraphQL: canViewRoleChanges(userId: ID!): Boolean!
-    public async Task<bool> CanViewRoleChangesAsync(
-        Guid userId,
-        [Service] AuthorizationService authorization)
-    {
-        return await authorization.CanViewRoleChangesAsync(userId);
-    }
-}
-
-// General queries
-public class Query(AppDbContext db, AuthorizationService auth)
+public class Query(AppDbContext db, IHttpContextAccessor http)
 {
     private readonly AppDbContext _db = db;
-    private readonly AuthorizationService _auth = auth;
+    private readonly IHttpContextAccessor _http = http;
 
-    // Fetch all users with role
+    // users and roles are simple and require authentication
+    [Authorize] // requires authenticated JWT
     public IQueryable<User> GetUsers() => _db.Users.Include(u => u.Role);
 
-    // Fetch all roles
+    [Authorize]
     public IQueryable<Role> GetRoles() => _db.Roles;
 
-    // Security events gated by authorization
-    public async Task<IQueryable<SecurityEvent>> GetSecurityEvents(Guid callerId)
+    // securityEvents is gated based on user's permissions in JWT
+    [Authorize]
+    public IQueryable<SecurityEvent> GetSecurityEvents()
     {
-        if (await _auth.CanViewRoleChangesAsync(callerId))
+        var user = _http.HttpContext?.User;
+        if (user == null || !user.Identity?.IsAuthenticated == true)
+            return Enumerable.Empty<SecurityEvent>().AsQueryable();
+
+        var hasViewAuth = user.HasClaim("permissions", "Audit.ViewAuthEvents");
+        var hasRoleChanges = user.HasClaim("permissions", "Audit.RoleChanges");
+
+        if (hasRoleChanges)
         {
-            return _db.SecurityEvents; // full access for SecurityAuditor
+            return _db.SecurityEvents.OrderByDescending(e => e.OccurredUtc);
+        }
+        else if (hasViewAuth)
+        {
+            return _db.SecurityEvents
+                .Where(e => e.EventType.StartsWith("Login"))
+                .OrderByDescending(e => e.OccurredUtc);
         }
 
-        if (await _auth.CanViewAuthEventsAsync(callerId))
-        {
-            return _db.SecurityEvents.Where(e => e.EventType.StartsWith("Login")); // AuthObserver
-        }
-
-        return Enumerable.Empty<SecurityEvent>().AsQueryable(); // BasicUser cannot see any
+        return Enumerable.Empty<SecurityEvent>().AsQueryable();
     }
 }

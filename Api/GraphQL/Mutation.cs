@@ -1,18 +1,16 @@
-using Api.Auth;
 using Api.Data;
 using Api.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Shared;
 
 namespace Api.GraphQL;
 
-// Provisioning mutations
 [ExtendObjectType("Mutation")]
 public class ProvisioningMutations
 {
     /// <summary>
-    /// provisionOnLogin(externalId, email, provider): String!
-    /// Returns a signed JWT token (string).
+    /// Provision a user on login and return a signed JWT token that includes user, role, and claims.
     /// </summary>
     public async Task<string> ProvisionOnLoginAsync(
         string externalId,
@@ -21,52 +19,41 @@ public class ProvisioningMutations
         [Service] ProvisioningService provisioning,
         CancellationToken ct = default)
     {
-        var token = await provisioning.ProvisionAndIssueTokenAsync(externalId, email, provider, ct);
-        return token;
+        // Service now returns just the token
+        return await provisioning.ProvisionOnLoginAsync(externalId, email, provider, ct);
     }
 }
 
-// General mutations
 public class Mutation(AppDbContext db)
 {
     private readonly AppDbContext _db = db;
 
-    // Assign role to user with audit event
-    public async Task<User?> AssignUserRole(Guid userId, Guid roleId, [Service] AuthorizationService auth)
+    [Authorize(Policy = "CanViewRoleChanges")]
+    public async Task<AssignRoleResultDto> AssignUserRole(Guid userId, Guid roleId)
     {
         var user = await _db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
-        if (user == null) return null;
-
-        if (!await auth.CanViewRoleChangesAsync(userId))
-            throw new Exception("Unauthorized");
+        if (user == null) throw new GraphQLException("User not found");
 
         var oldRoleName = user.Role?.Name ?? "Unknown";
-        var newRole = await _db.Roles.FirstAsync(r => r.Id == roleId);
+        var newRole = await _db.Roles.FirstOrDefaultAsync(r => r.Id == roleId);
+        if (newRole == null) throw new GraphQLException("Role not found");
 
         user.RoleId = roleId;
         await _db.SaveChangesAsync();
 
-        _db.SecurityEvents.Add(new SecurityEvent
+        // Single RoleAssigned event
+        var ev = new SecurityEvent
         {
             Id = Guid.NewGuid(),
             EventType = "RoleAssigned",
-            AuthorUserId = userId,
+            AuthorUserId = userId,      // if the author is the caller; you may want to use caller id from JWT
             AffectedUserId = userId,
             Details = $"from={oldRoleName} to={newRole.Name}",
             OccurredUtc = DateTime.UtcNow
-        });
+        };
+        _db.SecurityEvents.Add(ev);
         await _db.SaveChangesAsync();
 
-        return user;
-    }
-
-    // Add arbitrary security event
-    public async Task<SecurityEvent> AddSecurityEvent(SecurityEvent input)
-    {
-        input.Id = Guid.NewGuid();
-        input.OccurredUtc = DateTime.UtcNow;
-        _db.SecurityEvents.Add(input);
-        await _db.SaveChangesAsync();
-        return input;
+        return new AssignRoleResultDto(true, $"Role changed from {oldRoleName} to {newRole.Name}");
     }
 }
