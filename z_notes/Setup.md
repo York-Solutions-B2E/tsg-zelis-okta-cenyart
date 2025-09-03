@@ -66,6 +66,7 @@ dotnet add package HotChocolate.AspNetCore.Authorization --project Api
 dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer --version 8.0 --project Api
 dotnet add package System.IdentityModel.Tokens.Jwt --project Api
 
+
 // Tests
 dotnet add package FluentAssertions --project Tests
 dotnet add package Microsoft.EntityFrameworkCore.InMemory --project Tests
