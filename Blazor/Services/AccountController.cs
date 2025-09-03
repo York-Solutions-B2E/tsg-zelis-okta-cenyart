@@ -29,15 +29,30 @@ public class AccountController(IConfiguration config) : Controller
         if (string.IsNullOrEmpty(idToken))
             throw new InvalidOperationException("id_token is missing from the current session.");
 
-        // Get Okta config
+        // Remove stored JWT token from cookie auth properties
+        var authenticateResult = await HttpContext.AuthenticateAsync();
+        var props = authenticateResult.Properties ?? new AuthenticationProperties();
+        var tokens = props.GetTokens()?.ToList() ?? new List<AuthenticationToken>();
+
+        // Remove any stored access_token (JWT)
+        tokens.RemoveAll(t => string.Equals(t.Name, "access_token", StringComparison.OrdinalIgnoreCase));
+        props.StoreTokens(tokens);
+
+        if (authenticateResult.Principal != null)
+        {
+            // Re-issue cookie without JWT token
+            await HttpContext.SignInAsync(authenticateResult.Principal, props);
+        }
+
+        // Sign out locally (cookie + OIDC)
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        await HttpContext.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme);
+
+        // Build Okta logout URL
         var clientId = _config["Okta:ClientId"];
         var oktaDomain = _config["Okta:OktaDomain"];
         if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(oktaDomain))
             throw new InvalidOperationException("Okta configuration missing: OktaDomain or ClientId is null or empty.");
-
-        // Sign out locally first
-        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme);
 
         var postLogoutRedirect = "https://localhost:5001/signout/callback";
 

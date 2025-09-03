@@ -1,59 +1,59 @@
 using Api.Data;
 using Api.Services;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
 using Shared;
 
 namespace Api.GraphQL;
 
 [ExtendObjectType("Mutation")]
-public class ProvisioningMutations
+public class ProvisioningMutations(ProvisioningService prov)
 {
-    /// <summary>
-    /// Provision a user on login and return a signed JWT token that includes user, role, and claims.
-    /// </summary>
-    public async Task<string> ProvisionOnLoginAsync(
-        string externalId,
-        string email,
-        string provider,
-        [Service] ProvisioningService provisioning,
-        CancellationToken ct = default)
+    private readonly ProvisioningService _prov = prov;
+
+    public async Task<string> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
     {
-        // Service now returns just the token
-        return await provisioning.ProvisionOnLoginAsync(externalId, email, provider, ct);
+        return await _prov.ProvisionOnLoginAsync(externalId, email, provider, ct);
     }
 }
 
-public class Mutation(AppDbContext db)
+[ExtendObjectType("Mutation")]
+public class Mutation(IHttpContextAccessor http, SecurityEventService events, RoleService roles)
 {
-    private readonly AppDbContext _db = db;
+    private readonly IHttpContextAccessor _http = http;
+    private readonly SecurityEventService _events = events;
+    private readonly RoleService _roles = roles;
+
+    [Authorize]
+    public async Task<SecurityEvent> AddSecurityEventAsync(string eventType, Guid affectedUserId, string? details = null, CancellationToken ct = default)
+    {
+        var authorUserId = GetUserIdFromClaims();
+        return await _events.CreateEventAsync(eventType, authorUserId, affectedUserId, details, ct);
+    }
 
     [Authorize(Policy = "CanViewRoleChanges")]
-    public async Task<AssignRoleResultDto> AssignUserRole(Guid userId, Guid roleId)
+    public async Task<AssignRoleResultDto> AssignUserRoleAsync(Guid userId, Guid roleId, CancellationToken ct = default)
     {
-        var user = await _db.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
-        if (user == null) throw new GraphQLException("User not found");
+        var authorUserId = GetUserIdFromClaims();
 
-        var oldRoleName = user.Role?.Name ?? "Unknown";
-        var newRole = await _db.Roles.FirstOrDefaultAsync(r => r.Id == roleId);
-        if (newRole == null) throw new GraphQLException("Role not found");
+        var (success, message, oldRole, newRole) = await _roles.UpdateUserRoleAsync(userId, roleId, ct);
+        if (!success)
+            throw new GraphQLException(message);
 
-        user.RoleId = roleId;
-        await _db.SaveChangesAsync();
+        // Add RoleAssigned event after successful update
+        await _events.CreateRoleAssignedAsync(authorUserId, userId, oldRole, newRole, ct);
 
-        // Single RoleAssigned event
-        var ev = new SecurityEvent
-        {
-            Id = Guid.NewGuid(),
-            EventType = "RoleAssigned",
-            AuthorUserId = userId,      // if the author is the caller; you may want to use caller id from JWT
-            AffectedUserId = userId,
-            Details = $"from={oldRoleName} to={newRole.Name}",
-            OccurredUtc = DateTime.UtcNow
-        };
-        _db.SecurityEvents.Add(ev);
-        await _db.SaveChangesAsync();
+        return new AssignRoleResultDto(true, message);
+    }
 
-        return new AssignRoleResultDto(true, $"Role changed from {oldRoleName} to {newRole.Name}");
+    private Guid GetUserIdFromClaims()
+    {
+        var user = _http.HttpContext?.User;
+        if (user?.Identity?.IsAuthenticated != true)
+            throw new GraphQLException("Unauthenticated");
+
+        if (!Guid.TryParse(user.FindFirst("uid")?.Value, out var id))
+            throw new GraphQLException("Invalid uid claim in token");
+
+        return id;
     }
 }

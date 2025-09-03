@@ -1,12 +1,20 @@
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Text.Json;
-using Shared;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using System;
+using System.Linq;
+using Shared; // for DTOs like UserDto, RoleDto, SecurityEventDto, AssignRoleResultDto
 
 namespace Blazor.Services;
 
-public class GraphQLService(HttpClient http)
+public class GraphQLService
 {
-    private readonly HttpClient _http = http;
+    private readonly HttpClient _http;
     private readonly JsonSerializerOptions _opts = new() { PropertyNameCaseInsensitive = true };
+
+    public GraphQLService(HttpClient http) => _http = http ?? throw new ArgumentNullException(nameof(http));
 
     /// <summary>
     /// Posts a GraphQL document. Returns the "data" JsonElement.
@@ -14,29 +22,35 @@ public class GraphQLService(HttpClient http)
     /// </summary>
     private async Task<JsonElement> PostQueryAsync(string query, object? variables = null)
     {
-        // Always send "variables" key, even if empty
-        var payload = new
+        // Ensure the payload always has a 'variables' property (some GraphQL servers expect it)
+        var payload = new Dictionary<string, object?>
         {
-            query,
-            variables = variables ?? new { }
+            ["query"] = query,
+            ["variables"] = variables ?? new { }
         };
 
         var response = await _http.PostAsJsonAsync("/graphql", payload);
         response.EnsureSuccessStatusCode();
 
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var content = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(content);
+
         if (doc.RootElement.TryGetProperty("errors", out var errors))
             throw new ApplicationException("GraphQL errors: " + errors.ToString());
 
-        return doc.RootElement.GetProperty("data");
+        if (!doc.RootElement.TryGetProperty("data", out var data))
+            throw new ApplicationException("GraphQL response missing 'data'.");
+
+        return data;
     }
 
-    // Queries / Mutations ------------------------------------------------
+    // ---- Queries / Mutations (examples) ----
+
     public async Task<List<UserDto>> GetUsersAsync()
     {
         const string q = @"{ users { id email role { id name } } }";
         var data = await PostQueryAsync(q);
-        if (!data.TryGetProperty("users", out var arr)) return new();
+        if (!data.TryGetProperty("users", out var arr) || arr.ValueKind != JsonValueKind.Array) return new();
 
         var list = new List<UserDto>();
         foreach (var el in arr.EnumerateArray())
@@ -54,13 +68,12 @@ public class GraphQLService(HttpClient http)
     {
         const string q = @"{ roles { id name } }";
         var data = await PostQueryAsync(q);
-        if (!data.TryGetProperty("roles", out var arr)) return new();
+        if (!data.TryGetProperty("roles", out var arr) || arr.ValueKind != JsonValueKind.Array) return new();
 
-        var list = new List<RoleDto>();
-        foreach (var el in arr.EnumerateArray())
-        {
-            list.Add(new RoleDto(el.GetProperty("id").GetGuid(), el.GetProperty("name").GetString() ?? ""));
-        }
+        var list = arr.EnumerateArray()
+            .Select(el => new RoleDto(el.GetProperty("id").GetGuid(), el.GetProperty("name").GetString() ?? ""))
+            .ToList();
+
         return list;
     }
 
@@ -68,7 +81,7 @@ public class GraphQLService(HttpClient http)
     {
         const string q = @"{ securityEvents { id eventType authorUserId affectedUserId occurredUtc details } }";
         var data = await PostQueryAsync(q);
-        if (!data.TryGetProperty("securityEvents", out var arr)) return new();
+        if (!data.TryGetProperty("securityEvents", out var arr) || arr.ValueKind != JsonValueKind.Array) return new();
 
         var list = new List<SecurityEventDto>();
         foreach (var el in arr.EnumerateArray())
@@ -86,9 +99,6 @@ public class GraphQLService(HttpClient http)
         return list.OrderByDescending(s => s.OccurredUtc).ToList();
     }
 
-    /// <summary>
-    /// Queries that return boolean guards. Assumes server implements guard using JWT or caller context.
-    /// </summary>
     public async Task<bool> CanViewAuthEventsAsync()
     {
         const string q = @"{ canViewAuthEvents }";
@@ -103,9 +113,6 @@ public class GraphQLService(HttpClient http)
         return data.GetProperty("canViewRoleChanges").GetBoolean();
     }
 
-    /// <summary>
-    /// assignUserRole expects variables: userId, roleId. Returns success + message if your GraphQL returns that shape.
-    /// </summary>
     public async Task<AssignRoleResultDto?> AssignUserRoleAsync(Guid userId, Guid roleId)
     {
         var q = @"
@@ -115,14 +122,13 @@ public class GraphQLService(HttpClient http)
                 message
               }
             }";
-        var vars = new { userId = userId.ToString(), roleId = roleId.ToString() };
 
+        var vars = new { userId = userId.ToString(), roleId = roleId.ToString() };
         var data = await PostQueryAsync(q, vars);
 
-        if (!data.TryGetProperty("assignUserRole", out var obj)) return null;
+        if (!data.TryGetProperty("assignUserRole", out var obj) || obj.ValueKind != JsonValueKind.Object) return null;
 
-        // handle both shapes: either { success, message } or nested user
-        if (obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty("success", out var successEl))
+        if (obj.TryGetProperty("success", out var successEl))
         {
             var msg = obj.TryGetProperty("message", out var m) ? m.GetString() : null;
             return new AssignRoleResultDto(successEl.GetBoolean(), msg);

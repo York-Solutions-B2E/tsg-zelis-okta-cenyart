@@ -41,7 +41,10 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("CanViewRoleChanges", p => p.RequireClaim("permissions", "Audit.RoleChanges"));
 
 // Register services used by GraphQL resolvers
-builder.Services.AddScoped<ProvisioningService>();
+builder.Services
+    .AddScoped<ProvisioningService>()
+    .AddScoped<RoleService>()
+    .AddScoped<SecurityEventService>();
 
 // HotChocolate GraphQL
 builder.Services
