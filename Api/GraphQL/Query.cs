@@ -24,6 +24,7 @@ public class Query(AppDbContext db, IHttpContextAccessor http, SecurityEventServ
         if (user == null || !user.Identity?.IsAuthenticated == true)
             return Enumerable.Empty<SecurityEvent>().AsQueryable();
 
-        return _securityEvents.GetEventsForUser(user);
+        var evs = _securityEvents.GetEventsForUser(user);
+        return evs.AsQueryable();
     }
 }

@@ -10,27 +10,27 @@ public class SecurityEventService(AppDbContext db)
     // -------------------------------
     // Query logic
     // -------------------------------
-    public IQueryable<SecurityEvent> GetEventsForUser(ClaimsPrincipal user)
+    public IEnumerable<SecurityEvent> GetEventsForUser(ClaimsPrincipal caller)
     {
-        if (user == null || !user.Identity?.IsAuthenticated == true)
-            return Enumerable.Empty<SecurityEvent>().AsQueryable();
+        if (caller == null || caller.Identity?.IsAuthenticated != true)
+            return Enumerable.Empty<SecurityEvent>();
 
-        var hasViewAuth = user.HasClaim("permissions", "Audit.ViewAuthEvents");
-        var hasRoleChanges = user.HasClaim("permissions", "Audit.RoleChanges");
+        var hasViewAuth = caller.HasClaim("permissions", "Audit.ViewAuthEvents");
+        var hasRoleChanges = caller.HasClaim("permissions", "Audit.RoleChanges");
 
         if (hasRoleChanges)
         {
-            return _db.SecurityEvents
-                .OrderByDescending(e => e.OccurredUtc);
+            return _db.SecurityEvents.OrderByDescending(e => e.OccurredUtc).ToList();
         }
         else if (hasViewAuth)
         {
             return _db.SecurityEvents
                 .Where(e => e.EventType.StartsWith("Login"))
-                .OrderByDescending(e => e.OccurredUtc);
+                .OrderByDescending(e => e.OccurredUtc)
+                .ToList();
         }
 
-        return Enumerable.Empty<SecurityEvent>().AsQueryable();
+        return Enumerable.Empty<SecurityEvent>();
     }
 
     // -------------------------------

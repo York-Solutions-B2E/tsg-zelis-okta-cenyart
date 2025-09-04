@@ -1,100 +1,90 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using Microsoft.AspNetCore.Authentication;
 using Blazor.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Blazor
+// UI
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 
-// HttpContextAccessor + AccessTokenHandler for outgoing API calls
+// HttpContextAccessor + AccessToken handler for outgoing API calls
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<AccessTokenHandler>();
 
-// Typed ProvisioningClient: HttpClient will attach AccessTokenHandler which reads JWT from cookie
-builder.Services.AddHttpClient<ProvisioningClient>(client =>
+builder.Services.AddHttpClient("Backend", http =>
 {
-    client.BaseAddress = new Uri(builder.Configuration["Backend:BaseUrl"] ?? "https://localhost:5001");
-}).AddHttpMessageHandler<AccessTokenHandler>();
-
-// If you need generic HttpClient (fallback)
-builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("default"));
-
-builder.Services
-    .AddScoped<GraphQLService>()
-    .AddScoped<ProvisioningClient>();
-
-// Authentication (cookie + OIDC)
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;
+    http.BaseAddress = new Uri("https://localhost:7188");
 })
-.AddCookie()
-.AddOpenIdConnect("Okta", options =>
-{
-    options.Authority = builder.Configuration["Okta:OktaDomain"] ?? "https://integrator-7281285.okta.com";
-    options.ClientId = builder.Configuration["Okta:ClientId"];
-    options.ClientSecret = builder.Configuration["Okta:ClientSecret"];
-    options.ResponseType = OpenIdConnectResponseType.Code;
-    options.SaveTokens = true; // tokens are stored in cookie auth properties
-    options.GetClaimsFromUserInfoEndpoint = true;
-    options.Scope.Add("openid");
-    options.Scope.Add("profile");
-    options.Scope.Add("email");
+.AddHttpMessageHandler<AccessTokenHandler>();
 
-    // On token validated: call backend to provision and store returned JWT in cookie tokens
-    options.Events = new OpenIdConnectEvents
-    {
-        OnTokenValidated = async ctx =>
-        {
-            try
-            {
-                var principal = ctx.Principal;
-                var sub = principal?.FindFirst("sub")?.Value ?? principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-                var email = principal?.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value ?? string.Empty;
+builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("Backend"));
+builder.Services.AddScoped<QueryService>();
+builder.Services.AddScoped<MutationService>();
+builder.Services.AddScoped<TokenValidatedHandler>();
 
-                if (!string.IsNullOrEmpty(sub))
-                {
-                    // Resolve ProvisioningClient from request services and call provisioning mutation.
-                    using var scope = ctx.HttpContext.RequestServices.CreateScope();
-                    var prov = scope.ServiceProvider.GetRequiredService<ProvisioningClient>();
+// Authentication: Cookie principal for browser sessions, two OIDC providers (Okta + Google)
+// Default scheme is cookie, default challenge will be Okta (so Challenge() will go to Okta).
+builder.Services
+  .AddAuthentication(options =>
+  {
+      options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+      options.DefaultChallengeScheme = "Okta";
+  })
+  .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, o =>
+  {
+      o.SlidingExpiration = true;
+      o.ExpireTimeSpan = TimeSpan.FromHours(1);
+  })
+  .AddOpenIdConnect("Okta", o =>
+  {
+      o.Authority = builder.Configuration["Okta:Authority"] ?? "https://integrator-7281285.okta.com";
+      o.ClientId = builder.Configuration["Okta:ClientId"];
+      o.ClientSecret = builder.Configuration["Okta:ClientSecret"];
+      o.ResponseType = OpenIdConnectResponseType.Code;
+      o.UsePkce = true;
+      o.SaveTokens = true;
+      o.Scope.Clear();
+      o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+      o.GetClaimsFromUserInfoEndpoint = true;
 
-                    // GraphQL mutation returns JWT
-                    var jwt = await prov.ProvisionOnLoginAsync(sub, email, "Okta", ctx.HttpContext.RequestAborted);
+      o.Events = new OpenIdConnectEvents
+      {
+          OnTokenValidated = ctx =>
+              ctx.HttpContext.RequestServices
+                 .GetRequiredService<TokenValidatedHandler>()
+                 .HandleAsync(ctx)
+      };
+  });
+//   .AddOpenIdConnect("Google", o =>
+//   {
+//       o.Authority = "https://accounts.google.com";
+//       o.ClientId = builder.Configuration["Google:ClientId"];
+//       o.ClientSecret = builder.Configuration["Google:ClientSecret"];
+//       o.ResponseType = OpenIdConnectResponseType.Code;
+//       o.UsePkce = true;
+//       o.SaveTokens = true;
+//       o.Scope.Clear();
+//       o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+//       o.GetClaimsFromUserInfoEndpoint = true;
 
-                    // Persist JWT into cookie auth tokens (access_token)
-                    var current = await ctx.HttpContext.AuthenticateAsync();
-                    var props = current.Properties ?? new AuthenticationProperties();
-                    var tokens = props.GetTokens()?.ToList() ?? new List<AuthenticationToken>();
+//       o.Events = new OpenIdConnectEvents
+//       {
+//           OnTokenValidated = ctx =>
+//               ctx.HttpContext.RequestServices
+//                  .GetRequiredService<TokenValidatedHandler>()
+//                  .HandleAsync(ctx)
+//       };
+//   });
 
-                    // remove previous access_token if any, then add new one
-                    tokens.RemoveAll(t => t.Name == "access_token");
-                    tokens.Add(new AuthenticationToken { Name = "access_token", Value = jwt });
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("CanViewAuthEvents", p => p.RequireClaim("permissions", "Audit.ViewAuthEvents"))
+    .AddPolicy("CanViewRoleChanges", p => p.RequireClaim("permissions", "Audit.RoleChanges"));
 
-                    props.StoreTokens(tokens);
-
-                    // Re-issue the principal cookie with updated tokens so AccessTokenHandler can read it later
-                    await ctx.HttpContext.SignInAsync(current.Principal!, props);
-                }
-            }
-            catch (Exception ex)
-            {
-                var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
-                logger.LogError(ex, "Provisioning failed during OnTokenValidated");
-                // do not block sign-in
-            }
-        }
-    };
-});
-
-builder.Services.AddAuthorizationCore(); // for UI AuthorizeView etc.
-
-// Add MVC for AccountController endpoint
-builder.Services.AddControllers();
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Debug);
 
 var app = builder.Build();
 
@@ -103,6 +93,7 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Error");
     app.UseHsts();
 }
+
 app.UseStaticFiles();
 app.UseRouting();
 

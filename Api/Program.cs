@@ -13,7 +13,7 @@ var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "api";
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "very-long-secret-key-change-this";
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ZelisOkta")));
 
 // Authentication - JWT bearer
 builder.Services.AddAuthentication(options =>
@@ -46,15 +46,68 @@ builder.Services
     .AddScoped<RoleService>()
     .AddScoped<SecurityEventService>();
 
+// IHttpContextAccessor used by queries/mutations
+builder.Services.AddHttpContextAccessor();
+
 // HotChocolate GraphQL
 builder.Services
     .AddGraphQLServer()
     .AddAuthorization()
     .AddQueryType<Query>()
     .AddMutationType<Mutation>()
-    .AddTypeExtension<ProvisioningMutations>();
+    .ModifyRequestOptions(opt => opt.IncludeExceptionDetails = true);
+
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Debug);
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    try
+    {
+        if (context.Request.Path.StartsWithSegments("/graphql") &&
+            string.Equals(context.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            // read request body
+            context.Request.EnableBuffering();
+            using var sr = new StreamReader(context.Request.Body, leaveOpen: true);
+            var body = await sr.ReadToEndAsync();
+            context.Request.Body.Position = 0;
+            var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+            logger.LogInformation("Incoming GraphQL request body: {Body}", body);
+
+            // capture response body
+            var originalBody = context.Response.Body;
+            await using var ms = new MemoryStream();
+            context.Response.Body = ms;
+
+            await next(); // invoke pipeline
+
+            ms.Seek(0, SeekOrigin.Begin);
+            var responseText = await new StreamReader(ms).ReadToEndAsync();
+            ms.Seek(0, SeekOrigin.Begin);
+            await ms.CopyToAsync(originalBody);
+            context.Response.Body = originalBody;
+
+            logger.LogInformation("Outgoing GraphQL response body: {ResponseText}", responseText);
+            return;
+        }
+    }
+    catch (Exception ex)
+    {
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Error in GraphQL logging middleware");
+    }
+
+    await next();
+});
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
 
 app.UseRouting();
 
