@@ -3,34 +3,35 @@ using System.Security.Claims;
 
 namespace Api.Services;
 
-public class SecurityEventService(AppDbContext db)
+public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService> logger)
 {
     private readonly AppDbContext _db = db;
+    private readonly ILogger<SecurityEventService> _logger = logger;
 
     // -------------------------------
     // Query logic
     // -------------------------------
-    public IQueryable<SecurityEvent> GetEventsForUser(ClaimsPrincipal user)
+    public IEnumerable<SecurityEvent> GetEventsForUser(ClaimsPrincipal caller)
     {
-        if (user == null || !user.Identity?.IsAuthenticated == true)
-            return Enumerable.Empty<SecurityEvent>().AsQueryable();
+        if (caller == null || caller.Identity?.IsAuthenticated != true)
+            return Enumerable.Empty<SecurityEvent>();
 
-        var hasViewAuth = user.HasClaim("permissions", "Audit.ViewAuthEvents");
-        var hasRoleChanges = user.HasClaim("permissions", "Audit.RoleChanges");
+        var hasViewAuth = caller.HasClaim("permissions", "Audit.ViewAuthEvents");
+        var hasRoleChanges = caller.HasClaim("permissions", "Audit.RoleChanges");
 
         if (hasRoleChanges)
         {
-            return _db.SecurityEvents
-                .OrderByDescending(e => e.OccurredUtc);
+            return _db.SecurityEvents.OrderByDescending(e => e.OccurredUtc).ToList();
         }
         else if (hasViewAuth)
         {
             return _db.SecurityEvents
                 .Where(e => e.EventType.StartsWith("Login"))
-                .OrderByDescending(e => e.OccurredUtc);
+                .OrderByDescending(e => e.OccurredUtc)
+                .ToList();
         }
 
-        return Enumerable.Empty<SecurityEvent>().AsQueryable();
+        return Enumerable.Empty<SecurityEvent>();
     }
 
     // -------------------------------
@@ -57,13 +58,4 @@ public class SecurityEventService(AppDbContext db)
         await _db.SaveChangesAsync(ct);
         return ev;
     }
-
-    public Task<SecurityEvent> CreateLoginSuccessAsync(Guid userId, string provider, CancellationToken ct = default)
-        => CreateEventAsync("LoginSuccess", userId, userId, $"provider={provider}", ct);
-
-    public Task<SecurityEvent> CreateLogoutAsync(Guid userId, string? details = null, CancellationToken ct = default)
-        => CreateEventAsync("Logout", userId, userId, details ?? "local sign-out", ct);
-
-    public Task<SecurityEvent> CreateRoleAssignedAsync(Guid authorUserId, Guid affectedUserId, string from, string to, CancellationToken ct = default)
-        => CreateEventAsync("RoleAssigned", authorUserId, affectedUserId, $"from={from} to={to}", ct);
 }

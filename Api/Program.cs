@@ -13,7 +13,7 @@ var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "api";
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "very-long-secret-key-change-this";
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+    options.UseSqlServer(builder.Configuration.GetConnectionString("ZelisOkta")));
 
 // Authentication - JWT bearer
 builder.Services.AddAuthentication(options =>
@@ -41,10 +41,12 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("CanViewRoleChanges", p => p.RequireClaim("permissions", "Audit.RoleChanges"));
 
 // Register services used by GraphQL resolvers
-builder.Services
-    .AddScoped<ProvisioningService>()
-    .AddScoped<RoleService>()
-    .AddScoped<SecurityEventService>();
+builder.Services.AddScoped<ProvisioningService>();
+builder.Services.AddScoped<SecurityEventService>();
+builder.Services.AddScoped<RoleService>();
+
+// IHttpContextAccessor used by queries/mutations
+builder.Services.AddHttpContextAccessor();
 
 // HotChocolate GraphQL
 builder.Services
@@ -52,9 +54,19 @@ builder.Services
     .AddAuthorization()
     .AddQueryType<Query>()
     .AddMutationType<Mutation>()
-    .AddTypeExtension<ProvisioningMutations>();
+    .ModifyRequestOptions(opt => opt.IncludeExceptionDetails = true);
+
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.SetMinimumLevel(LogLevel.Debug);
+builder.Logging.AddFilter("Api", LogLevel.Debug);
 
 var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseDeveloperExceptionPage();
+}
 
 app.UseRouting();
 

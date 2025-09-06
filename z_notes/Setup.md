@@ -98,3 +98,11 @@ dotnet test
 dotnet run --project Api
 dotnet run --project Blazor
 ```
+
+curl -k -X POST https://localhost:7188/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ __typename }"}'
+
+curl -k -X POST https://localhost:7188/graphql \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation ($externalId: String!, $email: String!, $provider: String!) { provisionOnLogin(externalId: $externalId, email: $email, provider: $provider) }", "variables":{"externalId":"test-sub","email":"t@example.com","provider":"Okta"}}'

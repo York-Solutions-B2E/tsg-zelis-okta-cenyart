@@ -7,63 +7,87 @@ using Claim = System.Security.Claims.Claim;
 
 namespace Api.Services;
 
-public class ProvisioningService(AppDbContext db, IConfiguration config, SecurityEventService events)
+public class ProvisioningService(AppDbContext db, IConfiguration config, ILogger<ProvisioningService> logger)
 {
     private readonly AppDbContext _db = db;
     private readonly IConfiguration _config = config;
-    private readonly SecurityEventService _events = events;
+    private readonly ILogger<ProvisioningService> _logger = logger;
 
     /// <summary>
     /// Ensures the user exists, writes a LoginSuccess event, and returns a JWT token containing user, role and permissions claims.
     /// </summary>
     public async Task<string> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
     {
-        // Try to find existing user (load role+claims)
-        var user = await _db.Users
-            .Include(u => u.Role)
-                .ThenInclude(r => r.Claims)
-            .FirstOrDefaultAsync(u => u.ExternalId == externalId, ct);
+        _logger.LogInformation("ProvisionOnLoginAsync start externalId={ExternalId} email={Email} provider={Provider}",
+            externalId, email, provider);
 
-        if (user == null)
+        try
         {
-            var basicRole = await _db.Roles.FirstAsync(r => r.Name == "BasicUser", ct);
-            user = new User
+            var user = await _db.Users
+                .Include(u => u.Role)
+                    .ThenInclude(r => r.Claims)
+                .FirstOrDefaultAsync(u => u.ExternalId == externalId, ct);
+
+            if (user == null)
             {
-                Id = Guid.NewGuid(),
-                ExternalId = externalId,
-                Email = email,
-                RoleId = basicRole.Id
+                var basicRole = await _db.Roles.FirstAsync(r => r.Name == "BasicUser", ct);
+
+                user = new User
+                {
+                    Id = Guid.NewGuid(),
+                    ExternalId = externalId,
+                    Email = email,
+                    RoleId = basicRole.Id
+                };
+
+                _db.Users.Add(user);
+                await _db.SaveChangesAsync(ct);
+
+                // reload role and claims
+                await _db.Entry(user).Reference(u => u.Role).LoadAsync(ct);
+                await _db.Entry(user.Role).Collection(r => r.Claims).LoadAsync(ct);
+
+                _logger.LogInformation("Created new user {UserId} with role BasicUser", user.Id);
+            }
+            else
+            {
+                _logger.LogInformation("Found existing user {UserId} role={Role}", user.Id, user.Role?.Name ?? "<none>");
+            }
+
+            // Build claims for JWT
+            var claims = new List<Claim>
+            {
+                new Claim("uid", user.Id.ToString()),
+                new Claim("email", user.Email ?? string.Empty),
+                new Claim("role", user.Role?.Name ?? "BasicUser"),
+                new Claim("provider", provider ?? "Unknown")
             };
 
-            _db.Users.Add(user);
-            await _db.SaveChangesAsync(ct);
-
-            // reload role and claims
-            await _db.Entry(user).Reference(u => u.Role).LoadAsync(ct);
-            await _db.Entry(user.Role).Collection(r => r.Claims).LoadAsync(ct);
-        }
-
-        // Create LoginSuccess event via service
-        await _events.CreateLoginSuccessAsync(user.Id, provider, ct);
-
-        // Build claims for JWT
-        var claims = new List<Claim>
-        {
-            new Claim("uid", user.Id.ToString()),
-            new Claim("email", user.Email ?? string.Empty),
-            new Claim("role", user.Role?.Name ?? "BasicUser")
-        };
-
-        if (user.Role?.Claims != null)
-        {
-            foreach (var c in user.Role.Claims)
+            if (user.Role?.Claims != null)
             {
-                if (!string.IsNullOrWhiteSpace(c.Value))
-                    claims.Add(new Claim("permissions", c.Value));
+                foreach (var c in user.Role.Claims)
+                {
+                    if (!string.IsNullOrWhiteSpace(c.Value))
+                        claims.Add(new Claim("permissions", c.Value));
+                }
             }
-        }
 
-        return CreateJwt(claims);
+            // Log what claims will be included (not the token)
+            var claimList = string.Join(",", claims.Select(x => $"{x.Type}:{x.Value}"));
+            _logger.LogDebug("JWT claims for user {UserId}: {Claims}", user.Id, claimList);
+
+            var token = CreateJwt(claims);
+
+            _logger.LogInformation("ProvisionOnLoginAsync completed for user {UserId}. Token length={Length}", user.Id, token.Length);
+
+            // return the signed JWT string
+            return token;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ProvisionOnLoginAsync failed for externalId={ExternalId}", externalId);
+            throw;
+        }
     }
 
     private string CreateJwt(IEnumerable<Claim> claims)

@@ -1,13 +1,29 @@
 @page "/"
 @using Microsoft.AspNetCore.Components.Authorization
+@inject NavigationManager Nav
 
 <h3>Welcome</h3>
 
-<p>
-    Use one of the following to sign in:
-</p>
+<AuthorizeView>
+    <Authorized>
+        <p>Hello, @context.User.Identity?.Name!</p>
+        <button class="btn btn-danger" @onclick="SignOut">Sign out</button>
+    </Authorized>
+    <NotAuthorized>
+        <p>Please sign in:</p>
+        <button class="btn btn-primary me-2" @onclick='() => SignIn("Okta")'>Sign in with Okta</button>
+        <button class="btn btn-secondary" @onclick='() => SignIn("Google")'>Sign in with Google</button>
+    </NotAuthorized>
+</AuthorizeView>
 
-<div class="d-flex gap-3">
-    <a class="btn btn-primary" href="Account/OktaSignIn">Sign in with Okta</a>
-    <a class="btn btn-secondary" href="Account/OtherSignIn">Sign in with Other</a>
-</div>
+@code {
+    private void SignIn(string provider)
+    {
+        Nav.NavigateTo($"/Account/SignInUser/{provider}", forceLoad: true);
+    }
+
+    private void SignOut()
+    {
+        Nav.NavigateTo("/Account/SignOutUser", forceLoad: true);
+    }
+}

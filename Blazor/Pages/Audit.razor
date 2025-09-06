@@ -1,96 +1,141 @@
 @page "/audit"
 @using Shared
-@inject Blazor.Services.GraphQLService Gql
+@inject Blazor.Services.QueryService QueryService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IAuthorizationService AuthorizationService
 
 <h3>Security Audit Dashboard</h3>
 
-<div class="row">
-    <div class="col-md-6">
-        <h5>Auth Events</h5>
-        @if (!CanViewAuthEvents)
-        {
-            <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
-        }
-        else if (AuthEvents is null)
-        {
-            <p><em>Loading…</em></p>
-        }
-        else
-        {
-            <table class="table table-sm table-hover">
-                <thead><tr><th>Timestamp</th><th>Author</th><th>Event</th><th>Details</th></tr></thead>
-                <tbody>
-                    @foreach (var e in AuthEvents)
+@if (isLoading)
+{
+    <p><em>Loading…</em></p>
+}
+else if (!loaded)
+{
+    <div class="alert alert-danger">Failed to load audit data. @loadError</div>
+}
+else
+{
+    <div class="row">
+        <div class="col-md-6">
+            <h5>Auth Events</h5>
+            <AuthorizeView Policy="CanViewAuthEvents">
+                <Authorized>
+                    @if (AuthEvents?.Count == 0)
                     {
-                        <tr>
-                            <td>@e.OccurredUtc.ToString("u")</td>
-                            <td>@e.AuthorUserId</td>
-                            <td>@e.EventType</td>
-                            <td>@e.Details</td>
-                        </tr>
+                        <p><em>No auth events found.</em></p>
                     }
-                </tbody>
-            </table>
-        }
-    </div>
+                    else
+                    {
+                        <table class="table table-sm table-hover">
+                            <thead><tr><th>Timestamp</th><th>Author</th><th>Event</th><th>Details</th></tr></thead>
+                            <tbody>
+                                @foreach (var e in AuthEvents!)
+                                {
+                                    <tr>
+                                        <td>@e.OccurredUtc.ToString("u")</td>
+                                        <td>@e.AuthorUserId</td>
+                                        <td>@e.EventType</td>
+                                        <td>@e.Details</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </Authorized>
+                <NotAuthorized>
+                    <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
 
-    <div class="col-md-6">
-        <h5>Role Changes</h5>
-        @if (!CanViewRoleChanges)
-        {
-            <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
-        }
-        else if (RoleEvents is null)
-        {
-            <p><em>Loading…</em></p>
-        }
-        else
-        {
-            <table class="table table-sm table-hover">
-                <thead><tr><th>Timestamp</th><th>Actor->Target</th><th>Event</th><th>Details</th></tr></thead>
-                <tbody>
-                    @foreach (var e in RoleEvents)
+        <div class="col-md-6">
+            <h5>Role Changes</h5>
+            <AuthorizeView Policy="CanViewRoleChanges">
+                <Authorized>
+                    @if (RoleEvents?.Count == 0)
                     {
-                        <tr>
-                            <td>@e.OccurredUtc.ToString("u")</td>
-                            <td>@e.AuthorUserId -> @e.AffectedUserId</td>
-                            <td>@e.EventType</td>
-                            <td>@e.Details</td>
-                        </tr>
+                        <p><em>No role change events found.</em></p>
                     }
-                </tbody>
-            </table>
-        }
+                    else
+                    {
+                        <table class="table table-sm table-hover">
+                            <thead><tr><th>Timestamp</th><th>Actor -> Target</th><th>Event</th><th>Details</th></tr></thead>
+                            <tbody>
+                                @foreach (var e in RoleEvents!)
+                                {
+                                    <tr>
+                                        <td>@e.OccurredUtc.ToString("u")</td>
+                                        <td>@e.AuthorUserId -> @e.AffectedUserId</td>
+                                        <td>@e.EventType</td>
+                                        <td>@e.Details</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </Authorized>
+                <NotAuthorized>
+                    <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
+                </NotAuthorized>
+            </AuthorizeView>
+        </div>
     </div>
-</div>
+}
 
 @code {
+    private List<SecurityEventDto>? AllEvents;
     private List<SecurityEventDto>? AuthEvents;
     private List<SecurityEventDto>? RoleEvents;
-    private bool CanViewAuthEvents;
-    private bool CanViewRoleChanges;
+    private bool isLoading = true;
+    private bool loaded = false;
+    private string? loadError;
 
     protected override async Task OnInitializedAsync()
     {
-        // check permissions (server determines by JWT sent by AccessTokenHandler)
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        isLoading = true;
+        loaded = false;
+        loadError = null;
+
         try
         {
-            CanViewAuthEvents = await Gql.CanViewAuthEventsAsync();
-            CanViewRoleChanges = await Gql.CanViewRoleChangesAsync();
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
 
-            if (CanViewAuthEvents || CanViewRoleChanges)
+            var canViewAuth = (await AuthorizationService.AuthorizeAsync(user, "CanViewAuthEvents")).Succeeded;
+            var canViewRole = (await AuthorizationService.AuthorizeAsync(user, "CanViewRoleChanges")).Succeeded;
+
+            if (!canViewAuth && !canViewRole)
             {
-                var events = await Gql.GetSecurityEventsAsync();
-                AuthEvents = events.Where(e => e.EventType.StartsWith("Login")).ToList();
-                RoleEvents = events.Where(e => e.EventType == "RoleAssigned").ToList();
+                // Nothing to show; authorized view blocks will show NotAuthorized messages
+                AllEvents = new List<SecurityEventDto>();
+                AuthEvents = new();
+                RoleEvents = new();
+                loaded = true;
+                return;
             }
+
+            // request events (server will further enforce gating)
+            AllEvents = await QueryService.GetSecurityEventsAsync();
+
+            AuthEvents = AllEvents.Where(e => e.EventType.StartsWith("Login", StringComparison.OrdinalIgnoreCase)).ToList();
+            RoleEvents = AllEvents.Where(e => string.Equals(e.EventType, "RoleAssigned", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            loaded = true;
         }
         catch (Exception ex)
         {
-            // log or show friendly message
-            Console.Error.WriteLine("Audit load error: " + ex.Message);
-            CanViewAuthEvents = false;
-            CanViewRoleChanges = false;
+            loadError = ex.Message;
+            loaded = false;
+        }
+        finally
+        {
+            isLoading = false;
         }
     }
 }

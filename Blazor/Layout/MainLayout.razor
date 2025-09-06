@@ -4,18 +4,7 @@
 <div class="d-flex flex-column min-vh-100">
     <header class="navbar navbar-expand navbar-dark bg-dark">
         <div class="container-fluid">
-            <a class="navbar-brand text-white" href="/">Security Audit</a>
-            <div class="ms-auto">
-                <AuthorizeView>
-                    <Authorized>
-                        <span class="text-white me-3">@context.User.Identity?.Name</span>
-                        <a class="nav-link d-inline-block text-white" href="/Account/OktaSignOut">Sign out</a>
-                    </Authorized>
-                    <NotAuthorized>
-                        <a class="nav-link d-inline-block text-white" href="/Account/OktaSignIn">Sign in</a>
-                    </NotAuthorized>
-                </AuthorizeView>
-            </div>
+            <h5 class="text-white mb-4">Security Audit</h5>
         </div>
     </header>
 

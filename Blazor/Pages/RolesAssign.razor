@@ -1,0 +1,165 @@
+@page "/roles/assign"
+@using System.Security.Claims
+@using Shared
+@inject Blazor.Services.QueryService QueryService
+@inject Blazor.Services.MutationService MutationService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IAuthorizationService AuthorizationService
+
+<h3>Assign User Role</h3>
+
+@if (isLoading)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <AuthorizeView Policy="CanViewRoleChanges">
+        <Authorized>
+            @if (!loadSuccess)
+            {
+                <div class="alert alert-danger">Failed to load users or roles. @loadError</div>
+            }
+            else
+            {
+                <div class="mb-3">
+                    <label class="form-label">User</label>
+                    <select class="form-select" @bind="SelectedUserId">
+                        <option value="">-- select user --</option>
+                        @foreach (var u in Users)
+                        {
+                            <option value="@u.Id">@u.Email (@u.Role.Name)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Role</label>
+                    <select class="form-select" @bind="SelectedRoleId">
+                        <option value="">-- select role --</option>
+                        @foreach (var r in Roles)
+                        {
+                            <option value="@r.Id">@r.Name</option>
+                        }
+                    </select>
+                </div>
+
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@isSaving">
+                    @(isSaving ? "Saving…" : "Save")
+                </button>
+
+                @if (!string.IsNullOrEmpty(Message))
+                {
+                    <div class="mt-3 alert alert-info">@Message</div>
+                }
+            }
+        </Authorized>
+        <NotAuthorized>
+            <div class="alert alert-warning">Insufficient access. Contact your admin.</div>
+        </NotAuthorized>
+    </AuthorizeView>
+}
+
+@code {
+    private List<UserDto> Users = new();
+    private List<RoleDto> Roles = new();
+    private string? SelectedUserId;
+    private string? SelectedRoleId;
+    private string? Message;
+    private bool isLoading = true;
+    private bool isSaving = false;
+    private bool loadSuccess = false;
+    private string? loadError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await InitializeAsync();
+    }
+
+    private async Task InitializeAsync()
+    {
+        isLoading = true;
+        loadSuccess = false;
+        loadError = null;
+        Message = null;
+
+        try
+        {
+            // Use AuthenticationState + AuthorizationService to avoid backend calls if unauthorized.
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = authState.User;
+
+            var authz = await AuthorizationService.AuthorizeAsync(user, "CanViewRoleChanges");
+            if (!authz.Succeeded)
+            {
+                // user cannot assign roles — no need to fetch lists
+                loadSuccess = true; // page will show NotAuthorized via AuthorizeView
+                return;
+            }
+
+            // load lists needed for role assignment
+            Roles = await QueryService.GetRolesAsync();
+            Users = await QueryService.GetUsersAsync();
+            loadSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+            loadSuccess = false;
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        Message = null;
+
+        if (string.IsNullOrWhiteSpace(SelectedUserId) || string.IsNullOrWhiteSpace(SelectedRoleId))
+        {
+            Message = "Please select a user and a role.";
+            return;
+        }
+
+        if (!Guid.TryParse(SelectedUserId, out var userId) || !Guid.TryParse(SelectedRoleId, out var roleId))
+        {
+            Message = "Invalid selection.";
+            return;
+        }
+
+        try
+        {
+            isSaving = true;
+            var res = await MutationService.AssignUserRoleAsync(userId, roleId);
+
+            if (res == null)
+            {
+                Message = "Unexpected response from server.";
+            }
+            else if (res.Success)
+            {
+                Message = string.IsNullOrWhiteSpace(res.Message) ? "Role assigned." : res.Message;
+                // refresh user list so role names update
+                Users = await QueryService.GetUsersAsync();
+            }
+            else
+            {
+                Message = string.IsNullOrWhiteSpace(res.Message) ? "Failed to assign role." : res.Message;
+            }
+        }
+        catch (HttpRequestException hx)
+        {
+            Message = "Network error: " + hx.Message;
+        }
+        catch (Exception ex)
+        {
+            Message = "Error: " + ex.Message;
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+}
