@@ -7,11 +7,10 @@ using Claim = System.Security.Claims.Claim;
 
 namespace Api.Services;
 
-public class ProvisioningService(AppDbContext db, IConfiguration config, SecurityEventService events, ILogger<ProvisioningService> logger)
+public class ProvisioningService(AppDbContext db, IConfiguration config, ILogger<ProvisioningService> logger)
 {
     private readonly AppDbContext _db = db;
     private readonly IConfiguration _config = config;
-    private readonly SecurityEventService _events = events;
     private readonly ILogger<ProvisioningService> _logger = logger;
 
     /// <summary>
@@ -20,11 +19,10 @@ public class ProvisioningService(AppDbContext db, IConfiguration config, Securit
     public async Task<string> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
     {
         _logger.LogInformation("ProvisionOnLoginAsync start externalId={ExternalId} email={Email} provider={Provider}",
-            externalId, email ?? "<null>", provider ?? "<null>");
+            externalId, email, provider);
 
         try
         {
-            // Try to find existing user (load role+claims)
             var user = await _db.Users
                 .Include(u => u.Role)
                     .ThenInclude(r => r.Claims)
@@ -56,16 +54,13 @@ public class ProvisioningService(AppDbContext db, IConfiguration config, Securit
                 _logger.LogInformation("Found existing user {UserId} role={Role}", user.Id, user.Role?.Name ?? "<none>");
             }
 
-            // Create LoginSuccess event via service
-            var ev = await _events.CreateLoginSuccessAsync(user.Id, provider, ct);
-            _logger.LogInformation("Created LoginSuccess event {EventId} for user {UserId} provider={Provider}", ev.Id, user.Id, provider);
-
             // Build claims for JWT
             var claims = new List<Claim>
             {
                 new Claim("uid", user.Id.ToString()),
                 new Claim("email", user.Email ?? string.Empty),
-                new Claim("role", user.Role?.Name ?? "BasicUser")
+                new Claim("role", user.Role?.Name ?? "BasicUser"),
+                new Claim("provider", provider ?? "Unknown")
             };
 
             if (user.Role?.Claims != null)
@@ -83,7 +78,7 @@ public class ProvisioningService(AppDbContext db, IConfiguration config, Securit
 
             var token = CreateJwt(claims);
 
-            _logger.LogInformation("ProvisionOnLoginAsync completed for user {UserId}. Token length={Length}", user.Id, token?.Length ?? 0);
+            _logger.LogInformation("ProvisionOnLoginAsync completed for user {UserId}. Token length={Length}", user.Id, token.Length);
 
             // return the signed JWT string
             return token;

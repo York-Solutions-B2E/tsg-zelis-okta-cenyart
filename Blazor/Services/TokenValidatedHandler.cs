@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -38,8 +39,6 @@ namespace Blazor.Services
                     return;
                 }
 
-                _logger.LogDebug("TokenValidated: provisioning user externalId={Sub}, email={Email}, provider={Provider}", sub, email, provider);
-
                 string jwt;
                 try
                 {
@@ -58,30 +57,93 @@ namespace Blazor.Services
                     return;
                 }
 
-                // Persist JWT to cookie auth tokens so AccessTokenHandler can attach to outgoing requests
+                // Persist JWT and keep Okta id_token
                 var authResult = await ctx.HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                 var principalToUse = authResult.Principal ?? ctx.Principal;
 
                 var props = authResult.Properties ?? new AuthenticationProperties();
                 var currentTokens = props.GetTokens()?.ToList() ?? new List<AuthenticationToken>();
 
-                // Replace any existing access_token value
+                // keep any id_token already present
+                var idToken = ctx.TokenEndpointResponse?.IdToken
+                              ?? currentTokens.FirstOrDefault(t => t.Name == "id_token")?.Value;
+
+                // replace our own access_token with backend-issued JWT
                 currentTokens.RemoveAll(t => string.Equals(t.Name, "access_token", StringComparison.OrdinalIgnoreCase));
                 currentTokens.Add(new AuthenticationToken { Name = "access_token", Value = jwt });
+
+                // re-add the id_token if we found one
+                if (!string.IsNullOrEmpty(idToken) && !currentTokens.Any(t => t.Name == "id_token"))
+                {
+                    currentTokens.Add(new AuthenticationToken { Name = "id_token", Value = idToken });
+                }
 
                 props.StoreTokens(currentTokens);
 
                 if (principalToUse != null)
                 {
-                    await ctx.HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principalToUse, props);
+                    await ctx.HttpContext.SignInAsync(
+                        CookieAuthenticationDefaults.AuthenticationScheme,
+                        principalToUse,
+                        props);
                 }
 
-                _logger.LogInformation("Provisioning completed and JWT stored for externalId={Sub}", sub);
+                _logger.LogInformation("Provisioning completed. Stored JWT + preserved Okta id_token for externalId={Sub}", sub);
             }
             catch (Exception ex)
             {
                 // Last-resort catch-all to avoid breaking login flow
                 _logger.LogError(ex, "Unexpected error in TokenValidatedHandler.HandleAsync");
+            }
+        }
+
+        public async Task LoginSuccessEvent(HttpContext httpContext, CancellationToken ct = default)
+        {
+            try
+            {
+                var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                var props = authResult.Properties;
+
+                if (props == null)
+                {
+                    _logger.LogWarning("LoginSuccessEvent: No authentication properties found.");
+                    return;
+                }
+
+                var tokens = props.GetTokens();
+                var accessToken = tokens?.FirstOrDefault(t => t.Name == "access_token")?.Value;
+
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    _logger.LogWarning("LoginSuccessEvent: No backend access_token found.");
+                    return;
+                }
+
+                var handler = new JwtSecurityTokenHandler();
+                var token = handler.ReadJwtToken(accessToken);
+
+                var uidClaim = token.Claims.FirstOrDefault(c => c.Type == "uid")?.Value;
+                var providerClaim = token.Claims.FirstOrDefault(c => c.Type == "provider")?.Value;
+
+                if (!string.IsNullOrEmpty(uidClaim))
+                {
+                    await _mutationService.AddSecurityEventAsync(
+                        "LoginSuccess",
+                        Guid.Parse(uidClaim),
+                        $"provider={providerClaim}",
+                        ct
+                    );
+
+                    _logger.LogDebug("LoginSuccess Event created for user {Uid}", uidClaim);
+                }
+                else
+                {
+                    _logger.LogWarning("LoginSuccessEvent: 'uid' claim missing in backend JWT.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to log LoginSuccess event from backend JWT");
             }
         }
     }

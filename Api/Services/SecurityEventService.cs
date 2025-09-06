@@ -3,9 +3,10 @@ using System.Security.Claims;
 
 namespace Api.Services;
 
-public class SecurityEventService(AppDbContext db)
+public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService> logger)
 {
     private readonly AppDbContext _db = db;
+    private readonly ILogger<SecurityEventService> _logger = logger;
 
     // -------------------------------
     // Query logic
@@ -57,13 +58,4 @@ public class SecurityEventService(AppDbContext db)
         await _db.SaveChangesAsync(ct);
         return ev;
     }
-
-    public Task<SecurityEvent> CreateLoginSuccessAsync(Guid userId, string provider, CancellationToken ct = default)
-        => CreateEventAsync("LoginSuccess", userId, userId, $"provider={provider}", ct);
-
-    public Task<SecurityEvent> CreateLogoutAsync(Guid userId, string? details = null, CancellationToken ct = default)
-        => CreateEventAsync("Logout", userId, userId, details ?? "local sign-out", ct);
-
-    public Task<SecurityEvent> CreateRoleAssignedAsync(Guid authorUserId, Guid affectedUserId, string from, string to, CancellationToken ct = default)
-        => CreateEventAsync("RoleAssigned", authorUserId, affectedUserId, $"from={from} to={to}", ct);
 }

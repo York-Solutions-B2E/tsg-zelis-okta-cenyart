@@ -41,10 +41,9 @@ builder.Services.AddAuthorizationBuilder()
     .AddPolicy("CanViewRoleChanges", p => p.RequireClaim("permissions", "Audit.RoleChanges"));
 
 // Register services used by GraphQL resolvers
-builder.Services
-    .AddScoped<ProvisioningService>()
-    .AddScoped<RoleService>()
-    .AddScoped<SecurityEventService>();
+builder.Services.AddScoped<ProvisioningService>();
+builder.Services.AddScoped<SecurityEventService>();
+builder.Services.AddScoped<RoleService>();
 
 // IHttpContextAccessor used by queries/mutations
 builder.Services.AddHttpContextAccessor();
@@ -60,49 +59,9 @@ builder.Services
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.SetMinimumLevel(LogLevel.Debug);
+builder.Logging.AddFilter("Api", LogLevel.Debug);
 
 var app = builder.Build();
-
-app.Use(async (context, next) =>
-{
-    try
-    {
-        if (context.Request.Path.StartsWithSegments("/graphql") &&
-            string.Equals(context.Request.Method, "POST", StringComparison.OrdinalIgnoreCase))
-        {
-            // read request body
-            context.Request.EnableBuffering();
-            using var sr = new StreamReader(context.Request.Body, leaveOpen: true);
-            var body = await sr.ReadToEndAsync();
-            context.Request.Body.Position = 0;
-            var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
-            logger.LogInformation("Incoming GraphQL request body: {Body}", body);
-
-            // capture response body
-            var originalBody = context.Response.Body;
-            await using var ms = new MemoryStream();
-            context.Response.Body = ms;
-
-            await next(); // invoke pipeline
-
-            ms.Seek(0, SeekOrigin.Begin);
-            var responseText = await new StreamReader(ms).ReadToEndAsync();
-            ms.Seek(0, SeekOrigin.Begin);
-            await ms.CopyToAsync(originalBody);
-            context.Response.Body = originalBody;
-
-            logger.LogInformation("Outgoing GraphQL response body: {ResponseText}", responseText);
-            return;
-        }
-    }
-    catch (Exception ex)
-    {
-        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Error in GraphQL logging middleware");
-    }
-
-    await next();
-});
 
 if (app.Environment.IsDevelopment())
 {

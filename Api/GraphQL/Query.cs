@@ -2,29 +2,29 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Api.Data;
 using Api.Services;
+using System.Security.Claims;
 
 namespace Api.GraphQL;
 
-public class Query(AppDbContext db, IHttpContextAccessor http, SecurityEventService securityEvents)
+public class Query
 {
-    private readonly AppDbContext _db = db;
-    private readonly IHttpContextAccessor _http = http;
-    private readonly SecurityEventService _securityEvents = securityEvents;
+    // users and roles require authentication
+    [Authorize]
+    public IQueryable<User> GetUsers([Service] AppDbContext db)
+        => db.Users.Include(u => u.Role);
 
     [Authorize]
-    public IQueryable<User> GetUsers() => _db.Users.Include(u => u.Role);
+    public IQueryable<Role> GetRoles([Service] AppDbContext db)
+        => db.Roles;
 
+    // securityEvents gated based on permissions in caller's JWT
+    // Return IEnumerable to let the service decide query vs. materialization.
     [Authorize]
-    public IQueryable<Role> GetRoles() => _db.Roles;
-
-    [Authorize]
-    public IQueryable<SecurityEvent> GetSecurityEvents()
+    public IEnumerable<SecurityEvent> GetSecurityEvents(
+        [Service] IHttpContextAccessor http,
+        [Service] SecurityEventService securityEvents)
     {
-        var user = _http.HttpContext?.User;
-        if (user == null || !user.Identity?.IsAuthenticated == true)
-            return Enumerable.Empty<SecurityEvent>().AsQueryable();
-
-        var evs = _securityEvents.GetEventsForUser(user);
-        return evs.AsQueryable();
+        var user = http.HttpContext?.User ?? new ClaimsPrincipal();
+        return securityEvents.GetEventsForUser(user);
     }
 }

@@ -90,7 +90,7 @@ public class QueryService(HttpClient http)
             var authorUserId = ParseGuidFromJsonElement(el.GetProperty("authorUserId"));
             var affectedUserId = ParseGuidFromJsonElement(el.GetProperty("affectedUserId"));
             var occurredUtc = el.GetProperty("occurredUtc").GetDateTime();
-            var details = el.TryGetProperty("details", out var d) && d.ValueKind != JsonValueKind.Null ? d.GetString() : null;
+            var details = el.GetProperty("details").GetString() ?? string.Empty;
 
             outList.Add(new SecurityEventDto(id, eventType, authorUserId, affectedUserId, occurredUtc, details));
         }

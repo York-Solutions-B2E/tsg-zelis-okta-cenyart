@@ -10,7 +10,7 @@ namespace Blazor.Services
     public class MutationService(HttpClient http, ILogger<MutationService> logger)
     {
         private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
-        private readonly ILogger<MutationService> _log = logger ?? throw new ArgumentNullException(nameof(logger));
+        private readonly ILogger<MutationService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         private readonly JsonSerializerOptions _jsonOpts = new() { PropertyNameCaseInsensitive = true };
 
         private async Task<JsonElement> PostDocumentAsync(string document, object? variables = null, CancellationToken ct = default)
@@ -22,7 +22,7 @@ namespace Blazor.Services
             };
 
             var requestJson = JsonSerializer.Serialize(payload);
-            _log.LogInformation("GraphQL POST (provision): url={Url}, payload={Payload}", _http.BaseAddress, requestJson);
+            _logger.LogInformation("GraphQL POST (provision): url={Url}, payload={Payload}", _http.BaseAddress, requestJson);
 
             HttpResponseMessage resp;
             try
@@ -31,7 +31,7 @@ namespace Blazor.Services
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "HTTP POST to GraphQL failed (exception) url={Url}", _http.BaseAddress);
+                _logger.LogError(ex, "HTTP POST to GraphQL failed (exception) url={Url}", _http.BaseAddress);
                 throw;
             }
 
@@ -39,24 +39,24 @@ namespace Blazor.Services
 
             if (!resp.IsSuccessStatusCode)
             {
-                _log.LogError("GraphQL POST returned {StatusCode}. Response body: {Body}", (int)resp.StatusCode, body);
+                _logger.LogError("GraphQL POST returned {StatusCode}. Response body: {Body}", (int)resp.StatusCode, body);
                 resp.EnsureSuccessStatusCode(); // rethrow as HttpRequestException
             }
 
             using var doc = JsonDocument.Parse(body);
             if (doc.RootElement.TryGetProperty("errors", out var errors))
             {
-                _log.LogError("GraphQL returned errors: {Errors}", errors.ToString());
+                _logger.LogError("GraphQL returned errors: {Errors}", errors.ToString());
                 throw new ApplicationException("GraphQL errors: " + errors.ToString());
             }
 
             if (!doc.RootElement.TryGetProperty("data", out var data))
             {
-                _log.LogError("GraphQL response missing data. Full body: {Body}", body);
+                _logger.LogError("GraphQL response missing data. Full body: {Body}", body);
                 throw new ApplicationException("GraphQL response missing `data`.");
             }
 
-            _log.LogDebug("GraphQL response data: {Data}", data.ToString());
+            _logger.LogDebug("GraphQL response data: {Data}", data.ToString());
             return data.Clone();
         }
 
@@ -79,34 +79,34 @@ namespace Blazor.Services
                 if (!data.TryGetProperty("provisionOnLogin", out var tokEl) || tokEl.ValueKind != JsonValueKind.String)
                 {
                     var msg = $"Provisioning did not return a token. Raw data: {data.ToString()}";
-                    _log.LogWarning(msg);
+                    _logger.LogWarning(msg);
                     throw new ApplicationException(msg);
                 }
 
                 var token = tokEl.GetString()!;
-                _log.LogInformation("Provisioning succeeded for externalId={ExternalId}, provider={Provider}", externalId, provider);
+                _logger.LogInformation("Provisioning succeeded for externalId={ExternalId}, provider={Provider}", externalId, provider);
                 return token;
             }
             catch (HttpRequestException httpEx)
             {
                 // This typically contains status + body from PostDocumentAsync
-                _log.LogError(httpEx, "Provisioning HTTP failure for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, httpEx.Message);
+                _logger.LogError(httpEx, "Provisioning HTTP failure for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, httpEx.Message);
                 throw;
             }
             catch (ApplicationException appEx)
             {
-                _log.LogError(appEx, "Provisioning GraphQL error for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, appEx.Message);
+                _logger.LogError(appEx, "Provisioning GraphQL error for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, appEx.Message);
                 throw;
             }
             catch (Exception ex)
             {
-                _log.LogError(ex, "Unexpected error while provisioning user {ExternalId} (provider={Provider})", externalId, provider);
+                _logger.LogError(ex, "Unexpected error while provisioning user {ExternalId} (provider={Provider})", externalId, provider);
                 throw;
             }
         }
 
         /// <summary>
-        /// Assigns a role to a user using the assignUserRole mutation. Expects server to return AssignRoleResultDto shape.
+        /// Assigns a role to a user and logs security event.
         /// </summary>
         public async Task<AssignRoleResultDto> AssignUserRoleAsync(Guid userId, Guid roleId, CancellationToken ct = default)
         {
@@ -115,6 +115,8 @@ namespace Blazor.Services
                     assignUserRole(userId: $userId, roleId: $roleId) {
                         success
                         message
+                        previousRoleName
+                        newRoleName
                     }
                 }";
 
@@ -126,22 +128,52 @@ namespace Blazor.Services
 
             var success = obj.GetProperty("success").GetBoolean();
             var message = obj.GetProperty("message").GetString() ?? string.Empty;
+
+            // Extract role names if returned
+            var fromRole = obj.TryGetProperty("previousRoleName", out var p) ? p.GetString() ?? "unknown" : "unknown";
+            var toRole = obj.TryGetProperty("newRoleName", out var n) ? n.GetString() ?? "unknown" : "unknown";
+
+            // Fire security event only if successful
+            if (success)
+            {
+                await AddSecurityEventAsync(
+                    "RoleAssigned",
+                    userId,
+                    $"from={fromRole} to={toRole}",
+                    ct);
+                
+                _logger.LogDebug("RoleAssigned Event created");
+            }
+
             return new AssignRoleResultDto(success, message);
         }
 
         /// <summary>
         /// Adds a security event. Requires the caller's JWT to be attached to the HttpClient.
         /// </summary>
-        public async Task<SecurityEventDto> AddSecurityEventAsync(string eventType, Guid affectedUserId, string? details = null, CancellationToken ct = default)
+        public async Task<SecurityEventDto> AddSecurityEventAsync(
+            string eventType,
+            Guid affectedUserId,
+            string details,
+            CancellationToken ct = default)
         {
+            if (string.IsNullOrWhiteSpace(details))
+                throw new ArgumentException("Details must be provided", nameof(details));
+
             var mutation = @"
-                mutation ($eventType: String!, $affectedUserId: ID!, $details: String) {
+                mutation ($eventType: String!, $affectedUserId: UUID!, $details: String!) {
                     addSecurityEvent(eventType: $eventType, affectedUserId: $affectedUserId, details: $details) {
                         id eventType authorUserId affectedUserId occurredUtc details
                     }
                 }";
 
-            var vars = new { eventType, affectedUserId = affectedUserId.ToString(), details };
+            var vars = new
+            {
+                eventType,
+                affectedUserId = affectedUserId.ToString(),
+                details
+            };
+
             var data = await PostDocumentAsync(mutation, vars, ct);
 
             if (!data.TryGetProperty("addSecurityEvent", out var obj) || obj.ValueKind != JsonValueKind.Object)
@@ -154,7 +186,7 @@ namespace Blazor.Services
                 Guid.Parse(obj.GetProperty("authorUserId").GetString()!),
                 Guid.Parse(obj.GetProperty("affectedUserId").GetString()!),
                 obj.GetProperty("occurredUtc").GetDateTime(),
-                obj.TryGetProperty("details", out var d) && d.ValueKind != JsonValueKind.Null ? d.GetString() : null
+                obj.GetProperty("details").GetString() ?? string.Empty
             );
 
             return dto;
