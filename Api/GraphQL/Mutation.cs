@@ -7,24 +7,23 @@ namespace Api.GraphQL;
 
 public class Mutation
 {
-    // Public provision mutation — used by the frontend after OIDC token validated.
-    // Returns JWT token that contains uid, role, and permissions.
-    public async Task<string> ProvisionOnLoginAsync(
-        string externalId,
-        string email,
-        string provider,
-        [Service] ProvisioningService prov,
-        [Service] ILogger<Mutation> logger,
-        CancellationToken ct = default)
+    // Provision user after OIDC login — returns UserDto with role and claims
+    public async Task<UserDto> ProvisionOnLoginAsync(
+    string externalId,
+    string email,
+    string provider,
+    [Service] ProvisioningService prov,
+    [Service] ILogger<Mutation> logger,
+    CancellationToken ct = default)
     {
         logger.LogInformation("ProvisionOnLogin called. externalId={ExternalId} email={Email} provider={Provider}",
             externalId, email, provider);
 
         try
         {
-            var token = await prov.ProvisionOnLoginAsync(externalId, email, provider, ct);
+            var userDto = await prov.ProvisionOnLoginAsync(externalId, email, provider, ct);
             logger.LogInformation("ProvisionOnLogin succeeded for externalId={ExternalId}", externalId);
-            return token;
+            return userDto;
         }
         catch (Exception ex)
         {
@@ -33,29 +32,44 @@ public class Mutation
         }
     }
 
-    // Add arbitrary security event (Logout etc.) — requires authentication
+    // Add arbitrary security event (Logout, etc.) — requires authentication
     [Authorize]
-    public async Task<SecurityEvent> AddSecurityEventAsync(
-        string eventType,
-        Guid affectedUserId,
-        string details,
-        [Service] IHttpContextAccessor http,
-        [Service] SecurityEventService events,
-        [Service] ILogger<Mutation> logger,
-        CancellationToken ct = default)
+    public async Task<SecurityEventDto> AddSecurityEventAsync(
+    string eventType,
+    Guid affectedUserId,
+    string details,
+    [Service] IHttpContextAccessor http,
+    [Service] SecurityEventService events,
+    [Service] ILogger<Mutation> logger,
+    CancellationToken ct = default)
     {
         var authorUserId = GetUserIdFromClaims(http);
-        logger.LogInformation("AddSecurityEvent called by {Author} for {Affected} type={Type}", authorUserId, affectedUserId, eventType);
-        return await events.CreateEventAsync(eventType, authorUserId, affectedUserId, details, ct);
+
+        logger.LogInformation(
+            "AddSecurityEvent called by {Author} for {Affected} type={Type}",
+            authorUserId, affectedUserId, eventType
+        );
+
+        var ev = await events.CreateEventAsync(eventType, authorUserId, affectedUserId, details, ct);
+
+        return new SecurityEventDto(
+            Id: ev.Id,
+            EventType: ev.EventType,
+            AuthorUserId: ev.AuthorUserId,
+            AffectedUserId: ev.AffectedUserId,
+            OccurredUtc: ev.OccurredUtc,
+            Details: ev.Details
+        );
     }
 
-    // Assign role to user — requires the RoleChanges permission
+    // Assign role to a user — requires the RoleChanges permission
     [Authorize(Policy = "CanViewRoleChanges")]
-    public async Task<AssignRoleResultDto> AssignUserRoleAsync(
+    public async Task<AssignRolePayload> AssignUserRoleAsync(
         Guid userId,
         Guid roleId,
         [Service] IHttpContextAccessor http,
         [Service] RoleService roles,
+        [Service] SecurityEventService events,
         [Service] ILogger<Mutation> logger,
         CancellationToken ct = default)
     {
@@ -69,9 +83,19 @@ public class Mutation
             throw new GraphQLException(message);
         }
 
-        return new AssignRoleResultDto(true, message);
+        // Log security event for role change
+        await events.CreateEventAsync(
+            eventType: "RoleAssigned",
+            authorUserId: authorUserId,
+            affectedUserId: userId,
+            details: $"from={oldRoleName} to={newRoleName}",
+            ct: ct
+        );
+
+        return new AssignRolePayload(true, message);
     }
 
+    // Helper to get current user ID from claims
     private static Guid GetUserIdFromClaims(IHttpContextAccessor http)
     {
         var user = http.HttpContext?.User;

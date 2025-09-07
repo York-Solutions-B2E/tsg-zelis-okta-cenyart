@@ -67,5 +67,5 @@ public class SecurityEvent
     public DateTime OccurredUtc { get; set; } = DateTime.UtcNow;
 
     [MaxLength(400)]
-    public string? Details { get; set; }
+    public required string Details { get; set; }
 }

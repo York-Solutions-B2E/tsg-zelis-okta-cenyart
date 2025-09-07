@@ -5,9 +5,10 @@ using Shared;
 
 namespace Blazor.Services;
 
-public class MutationService(HttpClient http)
+public class MutationService(HttpClient http, ILogger<TokenValidatedHandler> logger)
 {
     private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
+    private readonly ILogger<TokenValidatedHandler> _logger = logger;
 
     private async Task<JsonElement> PostDocumentAsync(string document, object? variables = null, CancellationToken ct = default)
     {
@@ -18,10 +19,16 @@ public class MutationService(HttpClient http)
         };
 
         var resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
-        resp.EnsureSuccessStatusCode();
 
-        var text = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(text);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+
+        // Log response for debugging
+        Console.WriteLine($"GraphQL response: {body}");
+
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"GraphQL HTTP error. Status={resp.StatusCode}, Body={body}");
+
+        using var doc = JsonDocument.Parse(body);
 
         if (doc.RootElement.TryGetProperty("errors", out var errors))
             throw new ApplicationException("GraphQL errors: " + errors.ToString());
@@ -29,7 +36,8 @@ public class MutationService(HttpClient http)
         if (!doc.RootElement.TryGetProperty("data", out var data))
             throw new ApplicationException("GraphQL response missing `data`.");
 
-        return data;
+        // Return a deep copy so it doesn't depend on disposed JsonDocument
+        return JsonDocument.Parse(data.GetRawText()).RootElement.Clone();
     }
 
     private static Guid ParseGuid(JsonElement el) =>
@@ -38,25 +46,46 @@ public class MutationService(HttpClient http)
     public async Task<ProvisionPayload?> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
     {
         const string mutation = @"
-            mutation($externalId: String!, $email: String!, $provider: String!) {
-                provisionOnLogin(externalId: $externalId, email: $email, provider: $provider) {
-                    user { id email role { id name } claims { type value } }
-                }
-            }";
+        mutation($externalId: String!, $email: String!, $provider: String!) {
+            provisionOnLogin(externalId: $externalId, email: $email, provider: $provider) {
+                id
+                email
+                role { id name }
+                claims { type value }
+            }
+        }";
 
         var vars = new { externalId, email, provider };
         var data = await PostDocumentAsync(mutation, vars, ct);
 
-        if (!data.TryGetProperty("provisionOnLogin", out var el)) return null;
+        if (!data.TryGetProperty("provisionOnLogin", out var el))
+            return null;
 
-        var userEl = el.GetProperty("user");
+        // Extract role
+        var roleEl = el.GetProperty("role");
+        var roleDto = new RoleDto(
+            ParseGuid(roleEl.GetProperty("id")),
+            roleEl.GetProperty("name").GetString() ?? ""
+        );
+
+        // Extract claims safely
+        List<ClaimDto> claims = new();
+        if (el.TryGetProperty("claims", out var claimArr) && claimArr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var c in claimArr.EnumerateArray())
+            {
+                var type = c.GetProperty("type").GetString() ?? "";
+                var value = c.GetProperty("value").GetString() ?? "";
+                claims.Add(new ClaimDto(type, value));
+            }
+        }
+
+        // Extract user
         var user = new UserDto(
-            ParseGuid(userEl.GetProperty("id")),
-            userEl.GetProperty("email").GetString() ?? "",
-            new RoleDto(ParseGuid(userEl.GetProperty("role").GetProperty("id")), userEl.GetProperty("role").GetProperty("name").GetString() ?? ""),
-            userEl.TryGetProperty("claims", out var claimArr) && claimArr.ValueKind == JsonValueKind.Array
-                ? claimArr.EnumerateArray().Select(c => new ClaimDto(c.GetProperty("type").GetString() ?? "", c.GetProperty("value").GetString() ?? "")).ToList()
-                : new List<ClaimDto>()
+            ParseGuid(el.GetProperty("id")),
+            el.GetProperty("email").GetString() ?? "",
+            roleDto,
+            claims
         );
 
         return new ProvisionPayload(user);

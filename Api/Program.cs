@@ -15,7 +15,9 @@ var jwtKey = builder.Configuration["Jwt:Key"] ?? "very-long-secret-key-change-th
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("ZelisOkta")));
 
-// Authentication - JWT bearer
+var oktaDomain = builder.Configuration["Okta:OktaDomain"] ?? "https://integrator-7281285.okta.com";
+var authority = $"{oktaDomain}/oauth2/default";
+var audience = builder.Configuration["Okta:Audience"] ?? "api://default";
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -23,15 +25,16 @@ builder.Services.AddAuthentication(options =>
 })
 .AddJwtBearer(options =>
 {
+    options.Authority = authority;
+    options.Audience = audience;
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true,
+        ValidIssuer = authority,
         ValidateAudience = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtIssuer,
-        ValidAudience = jwtAudience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-        NameClaimType = "uid"
+        ValidAudience = audience,
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.FromMinutes(2),
     };
 });
 
