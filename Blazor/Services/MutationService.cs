@@ -1,195 +1,139 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Shared;
 
-namespace Blazor.Services
+namespace Blazor.Services;
+
+public class MutationService(HttpClient http)
 {
-    /// <summary>
-    /// Mutations and write operations. ProvisionOnLoginAsync returns the JWT string.
-    /// Also contains AssignUserRoleAsync and AddSecurityEventAsync (mutations).
-    /// </summary>
-    public class MutationService(HttpClient http, ILogger<MutationService> logger)
+    private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
+
+    private async Task<JsonElement> PostDocumentAsync(string document, object? variables = null, CancellationToken ct = default)
     {
-        private readonly HttpClient _http = http ?? throw new ArgumentNullException(nameof(http));
-        private readonly ILogger<MutationService> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        private readonly JsonSerializerOptions _jsonOpts = new() { PropertyNameCaseInsensitive = true };
-
-        private async Task<JsonElement> PostDocumentAsync(string document, object? variables = null, CancellationToken ct = default)
+        var payload = new Dictionary<string, object?>
         {
-            var payload = new Dictionary<string, object?>
-            {
-                ["query"] = document,
-                ["variables"] = variables ?? new { }
-            };
+            ["query"] = document,
+            ["variables"] = variables ?? new { }
+        };
 
-            var requestJson = JsonSerializer.Serialize(payload);
-            _logger.LogInformation("GraphQL POST (provision): url={Url}, payload={Payload}", _http.BaseAddress, requestJson);
+        var resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
+        resp.EnsureSuccessStatusCode();
 
-            HttpResponseMessage resp;
-            try
-            {
-                resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "HTTP POST to GraphQL failed (exception) url={Url}", _http.BaseAddress);
-                throw;
-            }
+        var text = await resp.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(text);
 
-            string body = await resp.Content.ReadAsStringAsync(ct);
+        if (doc.RootElement.TryGetProperty("errors", out var errors))
+            throw new ApplicationException("GraphQL errors: " + errors.ToString());
 
-            if (!resp.IsSuccessStatusCode)
-            {
-                _logger.LogError("GraphQL POST returned {StatusCode}. Response body: {Body}", (int)resp.StatusCode, body);
-                resp.EnsureSuccessStatusCode(); // rethrow as HttpRequestException
-            }
+        if (!doc.RootElement.TryGetProperty("data", out var data))
+            throw new ApplicationException("GraphQL response missing `data`.");
 
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.TryGetProperty("errors", out var errors))
-            {
-                _logger.LogError("GraphQL returned errors: {Errors}", errors.ToString());
-                throw new ApplicationException("GraphQL errors: " + errors.ToString());
-            }
+        return data;
+    }
 
-            if (!doc.RootElement.TryGetProperty("data", out var data))
-            {
-                _logger.LogError("GraphQL response missing data. Full body: {Body}", body);
-                throw new ApplicationException("GraphQL response missing `data`.");
-            }
+    private static Guid ParseGuid(JsonElement el) =>
+        el.ValueKind == JsonValueKind.String ? Guid.Parse(el.GetString()!) : Guid.Parse(el.ToString());
 
-            _logger.LogDebug("GraphQL response data: {Data}", data.ToString());
-            return data.Clone();
-        }
-
-        /// <summary>
-        /// Calls the server mutation ProvisionOnLoginAsync(...) and returns the JWT token string.
-        /// </summary>
-        public async Task<string> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
-        {
-            var mutation = @"
-                mutation ($externalId: String!, $email: String!, $provider: String!) {
-                    provisionOnLogin(externalId: $externalId, email: $email, provider: $provider)
-                }";
-
-            var vars = new { externalId, email, provider };
-
-            try
-            {
-                var data = await PostDocumentAsync(mutation, vars, ct);
-
-                if (!data.TryGetProperty("provisionOnLogin", out var tokEl) || tokEl.ValueKind != JsonValueKind.String)
-                {
-                    var msg = $"Provisioning did not return a token. Raw data: {data.ToString()}";
-                    _logger.LogWarning(msg);
-                    throw new ApplicationException(msg);
+    public async Task<ProvisionPayload?> ProvisionOnLoginAsync(string externalId, string email, string provider, CancellationToken ct = default)
+    {
+        const string mutation = @"
+            mutation($externalId: String!, $email: String!, $provider: String!) {
+                provisionOnLogin(externalId: $externalId, email: $email, provider: $provider) {
+                    user { id email role { id name } claims { type value } }
                 }
+            }";
 
-                var token = tokEl.GetString()!;
-                _logger.LogInformation("Provisioning succeeded for externalId={ExternalId}, provider={Provider}", externalId, provider);
-                return token;
-            }
-            catch (HttpRequestException httpEx)
-            {
-                // This typically contains status + body from PostDocumentAsync
-                _logger.LogError(httpEx, "Provisioning HTTP failure for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, httpEx.Message);
-                throw;
-            }
-            catch (ApplicationException appEx)
-            {
-                _logger.LogError(appEx, "Provisioning GraphQL error for externalId={ExternalId}, provider={Provider}: {Message}", externalId, provider, appEx.Message);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Unexpected error while provisioning user {ExternalId} (provider={Provider})", externalId, provider);
-                throw;
-            }
-        }
+        var vars = new { externalId, email, provider };
+        var data = await PostDocumentAsync(mutation, vars, ct);
 
-        /// <summary>
-        /// Assigns a role to a user and logs security event.
-        /// </summary>
-        public async Task<AssignRoleResultDto> AssignUserRoleAsync(Guid userId, Guid roleId, CancellationToken ct = default)
+        if (!data.TryGetProperty("provisionOnLogin", out var el)) return null;
+
+        var userEl = el.GetProperty("user");
+        var user = new UserDto(
+            ParseGuid(userEl.GetProperty("id")),
+            userEl.GetProperty("email").GetString() ?? "",
+            new RoleDto(ParseGuid(userEl.GetProperty("role").GetProperty("id")), userEl.GetProperty("role").GetProperty("name").GetString() ?? ""),
+            userEl.TryGetProperty("claims", out var claimArr) && claimArr.ValueKind == JsonValueKind.Array
+                ? claimArr.EnumerateArray().Select(c => new ClaimDto(c.GetProperty("type").GetString() ?? "", c.GetProperty("value").GetString() ?? "")).ToList()
+                : new List<ClaimDto>()
+        );
+
+        return new ProvisionPayload(user);
+    }
+
+    public async Task<AssignRolePayload> AssignRoleAsync(
+    Guid userId,
+    Guid roleId,
+    HttpContext httpContext,
+    CancellationToken ct = default)
+    {
+        // 1. Get author ID from cookie claims
+        var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        var principal = authResult.Principal;
+        var authorClaim = principal?.FindFirst("uid")?.Value;
+        if (string.IsNullOrEmpty(authorClaim))
+            throw new InvalidOperationException("Cannot determine author user ID from claims.");
+
+        var authorId = Guid.Parse(authorClaim);
+
+        // 2. Call backend RoleService (via mutation) to update user's role
+        const string mutation = @"
+        mutation($userId: UUID!, $roleId: UUID!) {
+            assignRole(userId: $userId, roleId: $roleId) {
+                success
+                message
+                oldRole
+                newRole
+            }
+        }";
+
+        var vars = new { userId, roleId };
+        var data = await PostDocumentAsync(mutation, vars, ct);
+
+        var el = data.GetProperty("assignRole");
+        var success = el.GetProperty("success").GetBoolean();
+        var message = el.GetProperty("message").GetString() ?? "";
+        var oldRole = el.GetProperty("oldRole").GetString() ?? "Unknown";
+        var newRole = el.GetProperty("newRole").GetString() ?? "Unknown";
+
+        // 3. Log RoleAssigned security event if successful
+        if (success)
         {
-            var mutation = @"
-                mutation ($userId: ID!, $roleId: ID!) {
-                    assignUserRole(userId: $userId, roleId: $roleId) {
-                        success
-                        message
-                        previousRoleName
-                        newRoleName
-                    }
-                }";
-
-            var vars = new { userId = userId.ToString(), roleId = roleId.ToString() };
-            var data = await PostDocumentAsync(mutation, vars, ct);
-
-            if (!data.TryGetProperty("assignUserRole", out var obj) || obj.ValueKind != JsonValueKind.Object)
-                throw new ApplicationException("assignUserRole returned unexpected payload");
-
-            var success = obj.GetProperty("success").GetBoolean();
-            var message = obj.GetProperty("message").GetString() ?? string.Empty;
-
-            // Extract role names if returned
-            var fromRole = obj.TryGetProperty("previousRoleName", out var p) ? p.GetString() ?? "unknown" : "unknown";
-            var toRole = obj.TryGetProperty("newRoleName", out var n) ? n.GetString() ?? "unknown" : "unknown";
-
-            // Fire security event only if successful
-            if (success)
-            {
-                await AddSecurityEventAsync(
-                    "RoleAssigned",
-                    userId,
-                    $"from={fromRole} to={toRole}",
-                    ct);
-                
-                _logger.LogDebug("RoleAssigned Event created");
-            }
-
-            return new AssignRoleResultDto(success, message);
-        }
-
-        /// <summary>
-        /// Adds a security event. Requires the caller's JWT to be attached to the HttpClient.
-        /// </summary>
-        public async Task<SecurityEventDto> AddSecurityEventAsync(
-            string eventType,
-            Guid affectedUserId,
-            string details,
-            CancellationToken ct = default)
-        {
-            if (string.IsNullOrWhiteSpace(details))
-                throw new ArgumentException("Details must be provided", nameof(details));
-
-            var mutation = @"
-                mutation ($eventType: String!, $affectedUserId: UUID!, $details: String!) {
-                    addSecurityEvent(eventType: $eventType, affectedUserId: $affectedUserId, details: $details) {
-                        id eventType authorUserId affectedUserId occurredUtc details
-                    }
-                }";
-
-            var vars = new
-            {
-                eventType,
-                affectedUserId = affectedUserId.ToString(),
-                details
-            };
-
-            var data = await PostDocumentAsync(mutation, vars, ct);
-
-            if (!data.TryGetProperty("addSecurityEvent", out var obj) || obj.ValueKind != JsonValueKind.Object)
-                throw new ApplicationException("addSecurityEvent returned unexpected payload");
-
-            var id = Guid.Parse(obj.GetProperty("id").GetString()!);
-            var dto = new SecurityEventDto(
-                id,
-                obj.GetProperty("eventType").GetString() ?? string.Empty,
-                Guid.Parse(obj.GetProperty("authorUserId").GetString()!),
-                Guid.Parse(obj.GetProperty("affectedUserId").GetString()!),
-                obj.GetProperty("occurredUtc").GetDateTime(),
-                obj.GetProperty("details").GetString() ?? string.Empty
+            await AddSecurityEventAsync(
+                eventType: "RoleAssigned",
+                authorUserId: authorId,
+                affectedUserId: userId,
+                details: $"from={oldRole} to={newRole}",
+                ct: ct
             );
-
-            return dto;
         }
+
+        return new AssignRolePayload(success, message);
+    }
+
+    public async Task<SecurityEventPayload?> AddSecurityEventAsync(string eventType, Guid authorUserId, Guid affectedUserId, string details, CancellationToken ct = default)
+    {
+        const string mutation = @"
+            mutation($eventType: String!, $authorUserId: UUID!, $affectedUserId: UUID!, $details: String!) {
+                addSecurityEvent(eventType: $eventType, authorUserId: $authorUserId, affectedUserId: $affectedUserId, details: $details) {
+                    id eventType authorUserId affectedUserId occurredUtc details
+                }
+            }";
+
+        var vars = new { eventType, authorUserId, affectedUserId, details };
+        var data = await PostDocumentAsync(mutation, vars, ct);
+
+        if (!data.TryGetProperty("addSecurityEvent", out var el)) return null;
+
+        var dto = new SecurityEventDto(
+            ParseGuid(el.GetProperty("id")),
+            el.GetProperty("eventType").GetString() ?? "",
+            ParseGuid(el.GetProperty("authorUserId")),
+            ParseGuid(el.GetProperty("affectedUserId")),
+            el.GetProperty("occurredUtc").GetDateTime(),
+            el.GetProperty("details").GetString() ?? "");
+
+        return new SecurityEventPayload(dto);
     }
 }

@@ -54,9 +54,7 @@ builder.Services
         {
             OnTokenValidated = async ctx =>
             {
-                var handler = ctx.HttpContext.RequestServices
-                    .GetRequiredService<TokenValidatedHandler>();
-
+                var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
                 await handler.HandleAsync(ctx);
                 await handler.LoginSuccessEvent(ctx.HttpContext, ctx.HttpContext.RequestAborted);
             }
@@ -76,10 +74,12 @@ builder.Services
 
 //       o.Events = new OpenIdConnectEvents
 //       {
-//           OnTokenValidated = ctx =>
-//               ctx.HttpContext.RequestServices
-//                  .GetRequiredService<TokenValidatedHandler>()
-//                  .HandleAsync(ctx)
+//             OnTokenValidated = async ctx =>
+//             {
+//                 var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
+//                 await handler.HandleAsync(ctx);
+//                 await handler.LoginSuccessEvent(ctx.HttpContext, ctx.HttpContext.RequestAborted);
+//             }
 //       };
 //   });
 

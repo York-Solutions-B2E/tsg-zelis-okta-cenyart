@@ -5,6 +5,16 @@
     <header class="navbar navbar-expand navbar-dark bg-dark">
         <div class="container-fluid">
             <h5 class="text-white mb-4">Security Audit</h5>
+
+            <div class="ms-auto">
+                <AuthorizeView>
+                    <Authorized>
+                        <a class="nav-link d-inline-block text-white me-3" href="profile">
+                            @context.User.Identity?.Name
+                        </a>
+                    </Authorized>
+                </AuthorizeView>
+            </div>
         </div>
     </header>
 

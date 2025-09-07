@@ -5,6 +5,7 @@
 @inject Blazor.Services.MutationService MutationService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject IAuthorizationService AuthorizationService
+@inject IHttpContextAccessor HttpContextAccessor
 
 <h3>Assign User Role</h3>
 
@@ -132,7 +133,12 @@ else
         try
         {
             isSaving = true;
-            var res = await MutationService.AssignUserRoleAsync(userId, roleId);
+            var res = await MutationService.AssignRoleAsync(
+                userId,
+                roleId,
+                HttpContextAccessor.HttpContext!,
+                ct: CancellationToken.None
+            );
 
             if (res == null)
             {
