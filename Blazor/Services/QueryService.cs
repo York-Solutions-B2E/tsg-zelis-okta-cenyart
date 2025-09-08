@@ -16,34 +16,38 @@ public class QueryService(HttpClient http)
         };
 
         var resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
-        resp.EnsureSuccessStatusCode();
 
-        var text = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(text);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+
+        // Log response for debugging
+        Console.WriteLine($"GraphQL response: {body}");
+
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"GraphQL HTTP error. Status={resp.StatusCode}, Body={body}");
+
+        using var doc = JsonDocument.Parse(body);
+
         if (doc.RootElement.TryGetProperty("errors", out var errors))
             throw new ApplicationException("GraphQL errors: " + errors.ToString());
 
         if (!doc.RootElement.TryGetProperty("data", out var data))
             throw new ApplicationException("GraphQL response missing `data`.");
 
-        return data;
+        // Return a deep copy so it doesn't depend on disposed JsonDocument
+        return JsonDocument.Parse(data.GetRawText()).RootElement.Clone();
     }
 
-    private static Guid ParseGuidFromJsonElement(JsonElement el)
-    {
-        // GraphQL often returns IDs as strings — handle both string and GUID types
-        return el.ValueKind switch
+    private static Guid ParseGuidFromJsonElement(JsonElement el) =>
+        el.ValueKind switch
         {
             JsonValueKind.String => Guid.Parse(el.GetString()!),
-            JsonValueKind.Number => throw new ApplicationException("Unexpected numeric id in GraphQL result."),
             JsonValueKind.Null => Guid.Empty,
             _ => Guid.Parse(el.ToString())
         };
-    }
 
     public async Task<List<UserDto>> GetUsersAsync(CancellationToken ct = default)
     {
-        const string q = @"{ users { id email role { id name } } }";
+        const string q = @"{ users { id email role { id name } claims { type value } } }";
         var data = await PostDocumentAsync(q, null, ct);
 
         if (!data.TryGetProperty("users", out var arr) || arr.ValueKind != JsonValueKind.Array)
@@ -56,7 +60,19 @@ public class QueryService(HttpClient http)
             var email = el.GetProperty("email").GetString() ?? "";
             var roleEl = el.GetProperty("role");
             var role = new RoleDto(ParseGuidFromJsonElement(roleEl.GetProperty("id")), roleEl.GetProperty("name").GetString() ?? "");
-            list.Add(new UserDto(id, email, role));
+
+            var claims = new List<ClaimDto>();
+            if (el.TryGetProperty("claims", out var claimArr) && claimArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var c in claimArr.EnumerateArray())
+                {
+                    claims.Add(new ClaimDto(
+                        c.GetProperty("type").GetString() ?? "",
+                        c.GetProperty("value").GetString() ?? ""));
+                }
+            }
+
+            list.Add(new UserDto(id, email, role, claims));
         }
         return list;
     }
@@ -82,19 +98,15 @@ public class QueryService(HttpClient http)
         if (!data.TryGetProperty("securityEvents", out var arr) || arr.ValueKind != JsonValueKind.Array)
             return new List<SecurityEventDto>();
 
-        var outList = new List<SecurityEventDto>();
-        foreach (var el in arr.EnumerateArray())
-        {
-            var id = ParseGuidFromJsonElement(el.GetProperty("id"));
-            var eventType = el.GetProperty("eventType").GetString() ?? "";
-            var authorUserId = ParseGuidFromJsonElement(el.GetProperty("authorUserId"));
-            var affectedUserId = ParseGuidFromJsonElement(el.GetProperty("affectedUserId"));
-            var occurredUtc = el.GetProperty("occurredUtc").GetDateTime();
-            var details = el.GetProperty("details").GetString() ?? string.Empty;
-
-            outList.Add(new SecurityEventDto(id, eventType, authorUserId, affectedUserId, occurredUtc, details));
-        }
-
-        return outList.OrderByDescending(e => e.OccurredUtc).ToList();
+        return arr.EnumerateArray()
+            .Select(el => new SecurityEventDto(
+                ParseGuidFromJsonElement(el.GetProperty("id")),
+                el.GetProperty("eventType").GetString() ?? "",
+                ParseGuidFromJsonElement(el.GetProperty("authorUserId")),
+                ParseGuidFromJsonElement(el.GetProperty("affectedUserId")),
+                el.GetProperty("occurredUtc").GetDateTime(),
+                el.GetProperty("details").GetString() ?? ""))
+            .OrderByDescending(e => e.OccurredUtc)
+            .ToList();
     }
 }

@@ -1,0 +1,150 @@
+﻿@page "/profile"
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using System.IdentityModel.Tokens.Jwt
+@using System.Security.Claims
+@using Microsoft.IdentityModel.Tokens
+@inject IHttpContextAccessor HttpContextAccessor
+@inject NavigationManager Nav
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>Profile</h3>
+    <button class="btn btn-primary" @onclick="GrantRoleChangeAccess" disabled="@HasRoleChangePermission">
+        Grant Access to Assign Role
+    </button>
+</div>
+
+<AuthorizeView>
+    <Authorized Context="context">
+
+        <h5>All Claims (Authentication State)</h5>
+        <table class="table table-dark table-striped">
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <tbody>
+                @foreach (var claim in context.User.Claims)
+                {
+                    <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+                }
+            </tbody>
+        </table>
+
+        @if (!string.IsNullOrEmpty(idToken))
+        {
+            <h5>ID Token (raw)</h5>
+            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
+                @idToken
+            </div>
+
+            <h5>ID Token Claims</h5>
+            <table class="table table-dark table-striped">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody>
+                    @foreach (var claim in idClaims)
+                    {
+                        <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (!string.IsNullOrEmpty(accessToken))
+        {
+            <h5>Access Token (raw)</h5>
+            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
+                @accessToken
+            </div>
+
+            <h5>Access Token Claims</h5>
+            <table class="table table-dark table-striped">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody>
+                    @foreach (var claim in accessClaims)
+                    {
+                        <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (!string.IsNullOrEmpty(apiAccessToken))
+        {
+            <h5>ApiAccessToken (raw)</h5>
+            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
+                @apiAccessToken
+            </div>
+
+            <h5>ApiAccessToken Claims</h5>
+            <table class="table table-dark table-striped">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody>
+                    @foreach (var claim in apiAccessClaims)
+                    {
+                        <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+    </Authorized>
+
+    <NotAuthorized>
+        <div class="alert alert-warning">You are not signed in!</div>
+    </NotAuthorized>
+</AuthorizeView>
+
+@code {
+    private string? idToken;
+    private string? accessToken;
+    private string? apiAccessToken;
+    private List<Claim> idClaims = new();
+    private List<Claim> accessClaims = new();
+    private List<Claim> apiAccessClaims = new();
+    private bool HasRoleChangePermission => HttpContextAccessor.HttpContext?.User?.HasClaim("permissions", "Audit.RoleChanges") ?? false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var httpContext = HttpContextAccessor.HttpContext;
+        if (httpContext is null) return;
+
+        var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        if (authResult?.Properties is null) return;
+
+        idToken = authResult.Properties.GetTokenValue("id_token");
+        accessToken = authResult.Properties.GetTokenValue("access_token");
+
+        var handler = new JwtSecurityTokenHandler();
+
+        if (!string.IsNullOrEmpty(idToken))
+        {
+            var jwt = handler.ReadJwtToken(idToken);
+            idClaims = jwt.Claims.ToList();
+        }
+
+        if (!string.IsNullOrEmpty(accessToken))
+        {
+            var jwt = handler.ReadJwtToken(accessToken);
+            accessClaims = jwt.Claims.ToList();
+        }
+
+        // Load or generate ApiAccessToken
+        apiAccessToken = authResult.Properties.GetTokenValue("api_access_token");
+        if (!string.IsNullOrEmpty(apiAccessToken))
+        {
+            var jwt = handler.ReadJwtToken(apiAccessToken);
+            apiAccessClaims = jwt.Claims.ToList();
+        }
+    }
+
+    private void GrantRoleChangeAccess()
+    {
+        // Get the path relative to the app base, e.g. "roles/assign" or "" (for root).
+        var relative = Nav.ToBaseRelativePath(Nav.Uri) ?? "";
+        // Ensure it is an absolute local path for LocalRedirect (starts with '/')
+        var returnPath = string.IsNullOrEmpty(relative) ? "/" : "/" + relative.TrimStart('/');
+        // URL-encode the local path for safe query string usage
+        var encoded = Uri.EscapeDataString(returnPath);
+
+        // Navigate with a full page load so the controller can set cookie headers safely
+        Nav.NavigateTo($"/Account/grant-role-change?returnUrl={encoded}", forceLoad: true);
+    }
+}

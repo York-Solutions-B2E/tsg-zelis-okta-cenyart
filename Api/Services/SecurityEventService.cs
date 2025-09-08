@@ -1,4 +1,5 @@
 using Api.Data;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 namespace Api.Services;
@@ -21,15 +22,20 @@ public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService>
 
         if (hasRoleChanges)
         {
-            return _db.SecurityEvents.OrderByDescending(e => e.OccurredUtc).ToList();
+            return _db.SecurityEvents
+                .AsNoTracking()
+                .OrderByDescending(e => e.OccurredUtc)
+                .ToList();
         }
         else if (hasViewAuth)
         {
             return _db.SecurityEvents
+                .AsNoTracking()
                 .Where(e => e.EventType.StartsWith("Login"))
                 .OrderByDescending(e => e.OccurredUtc)
                 .ToList();
         }
+
 
         return Enumerable.Empty<SecurityEvent>();
     }
@@ -41,7 +47,7 @@ public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService>
         string eventType,
         Guid authorUserId,
         Guid affectedUserId,
-        string? details = null,
+        string details,
         CancellationToken ct = default)
     {
         var ev = new SecurityEvent
@@ -56,6 +62,7 @@ public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService>
 
         _db.SecurityEvents.Add(ev);
         await _db.SaveChangesAsync(ct);
+        _logger.LogDebug("SecurityEvent created: {EventType} by {Author} affecting {Affected}", eventType, authorUserId, affectedUserId);
         return ev;
     }
 }

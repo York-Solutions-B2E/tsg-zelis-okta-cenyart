@@ -3,10 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Blazor.Services;
 
-/// <summary>
-/// DelegatingHandler that attaches the JWT stored in the cookie authentication tokens
-/// as the Authorization: Bearer {token} header to outgoing requests.
-/// </summary>
+// AccessTokenHandler: attaches API access token from HttpContext to outgoing HttpClient requests
 public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
 {
     private readonly IHttpContextAccessor _ctx = ctx;
@@ -16,17 +13,12 @@ public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
         var httpContext = _ctx.HttpContext;
         if (httpContext != null)
         {
-            // read tokens stored on cookie auth properties
-            var authResult = await httpContext.AuthenticateAsync();
-            var props = authResult.Properties;
-            if (props != null)
+            // Pull your API access token (custom JWT) instead of Okta's access_token
+            var apiToken = await httpContext.GetTokenAsync("api_access_token");
+
+            if (!string.IsNullOrWhiteSpace(apiToken))
             {
-                var tokens = props.GetTokens();
-                var access = tokens?.FirstOrDefault(t => string.Equals(t.Name, "access_token", StringComparison.OrdinalIgnoreCase))?.Value;
-                if (!string.IsNullOrWhiteSpace(access))
-                {
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", access);
-                }
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
             }
         }
 
