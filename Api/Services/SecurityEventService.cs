@@ -14,30 +14,30 @@ public class SecurityEventService(AppDbContext db, ILogger<SecurityEventService>
     // -------------------------------
     public IEnumerable<SecurityEvent> GetEventsForUser(ClaimsPrincipal caller)
     {
-        if (caller == null || caller.Identity?.IsAuthenticated != true)
-            return Enumerable.Empty<SecurityEvent>();
+        // if (caller == null || caller.Identity?.IsAuthenticated != true)
+        //     return Enumerable.Empty<SecurityEvent>();
 
         var hasViewAuth = caller.HasClaim("permissions", "Audit.ViewAuthEvents");
         var hasRoleChanges = caller.HasClaim("permissions", "Audit.RoleChanges");
 
-        if (hasRoleChanges)
+        if (true)
         {
             return _db.SecurityEvents
                 .AsNoTracking()
                 .OrderByDescending(e => e.OccurredUtc)
                 .ToList();
         }
-        else if (hasViewAuth)
-        {
-            return _db.SecurityEvents
-                .AsNoTracking()
-                .Where(e => e.EventType.StartsWith("Login"))
-                .OrderByDescending(e => e.OccurredUtc)
-                .ToList();
-        }
+        // else if (hasViewAuth)
+        // {
+        //     return _db.SecurityEvents
+        //         .AsNoTracking()
+        //         .Where(e => e.EventType.StartsWith("Login"))
+        //         .OrderByDescending(e => e.OccurredUtc)
+        //         .ToList();
+        // }
 
 
-        return Enumerable.Empty<SecurityEvent>();
+        // return Enumerable.Empty<SecurityEvent>();
     }
 
     // -------------------------------

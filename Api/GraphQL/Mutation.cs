@@ -45,22 +45,20 @@ public class Mutation
     public async Task<AssignRolePayload> AssignUserRoleAsync(
         Guid userId,
         Guid roleId,
-        string oldRole,
-        string newRole,
         [Service] RoleService roles,
         [Service] ILogger<Mutation> logger,
         CancellationToken ct = default)
     {
         logger.LogInformation("AssignUserRoleAsync called for user {UserId} -> role {RoleId}", userId, roleId);
 
-        var (success, message, oldRoleName, newRoleName) = await roles.UpdateUserRoleAsync(userId, roleId, ct);
+        var (success, message, oldRole, newRole) = await roles.UpdateUserRoleAsync(userId, roleId, ct);
         if (!success)
         {
             logger.LogWarning("AssignUserRoleAsync failed to update user {UserId}: {Message}", userId, message);
             throw new GraphQLException(message);
         }
 
-        return new AssignRolePayload(true, message, oldRoleName, newRoleName);
+        return new AssignRolePayload(true, message, oldRole, newRole);
     }
 
     // -------------------------------

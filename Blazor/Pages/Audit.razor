@@ -123,7 +123,11 @@ else
             // request events (server will further enforce gating)
             AllEvents = await QueryService.GetSecurityEventsAsync();
 
-            AuthEvents = AllEvents.Where(e => e.EventType.StartsWith("Login", StringComparison.OrdinalIgnoreCase)).ToList();
+            AuthEvents = AllEvents
+                .Where(e =>
+                    e.EventType.StartsWith("Login", StringComparison.OrdinalIgnoreCase) ||
+                    e.EventType.StartsWith("Logout", StringComparison.OrdinalIgnoreCase))
+                .ToList();
             RoleEvents = AllEvents.Where(e => string.Equals(e.EventType, "RoleAssigned", StringComparison.OrdinalIgnoreCase)).ToList();
 
             loaded = true;

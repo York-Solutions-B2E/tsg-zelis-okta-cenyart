@@ -117,7 +117,9 @@ public class MutationService(HttpClient http, ILogger<TokenValidatedHandler> log
             }
         }";
 
-        var vars = new { userId, roleId };
+        var oldRoleName = "";
+        var newRoleName = "";
+        var vars = new { userId, roleId, oldRoleName, newRoleName };
         var data = await PostDocumentAsync(mutation, vars, ct);
 
         var el = data.GetProperty("assignUserRole");
