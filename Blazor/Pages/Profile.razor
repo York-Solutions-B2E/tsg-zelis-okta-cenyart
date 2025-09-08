@@ -3,11 +3,15 @@
 @using Microsoft.AspNetCore.Authentication.Cookies
 @using System.IdentityModel.Tokens.Jwt
 @using System.Security.Claims
+@using Microsoft.IdentityModel.Tokens
 @inject IHttpContextAccessor HttpContextAccessor
 @inject NavigationManager Nav
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>Profile</h3>
+    <button class="btn btn-primary" @onclick="GrantRoleChangeAccess" disabled="@HasRoleChangePermission">
+        Grant Access to Assign Role
+    </button>
 </div>
 
 <AuthorizeView>
@@ -15,26 +19,14 @@
 
         <h5>All Claims (Authentication State)</h5>
         <table class="table table-dark table-striped">
-            <thead>
-                <tr>
-                    <th>Key</th>
-                    <th>Value</th>
-                </tr>
-            </thead>
+            <thead><tr><th>Key</th><th>Value</th></tr></thead>
             <tbody>
                 @foreach (var claim in context.User.Claims)
                 {
-                    <tr>
-                        <td>@claim.Type</td>
-                        <td>@claim.Value</td>
-                    </tr>
+                    <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
                 }
             </tbody>
         </table>
-
-        <button class="btn btn-primary mb-3" @onclick="GrantRoleChangeAccess" disabled="@HasRoleChangePermission">
-            Grant Access to Assign Role
-        </button>
 
         @if (!string.IsNullOrEmpty(idToken))
         {
@@ -45,9 +37,7 @@
 
             <h5>ID Token Claims</h5>
             <table class="table table-dark table-striped">
-                <thead>
-                    <tr><th>Key</th><th>Value</th></tr>
-                </thead>
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
                 <tbody>
                     @foreach (var claim in idClaims)
                     {
@@ -76,6 +66,25 @@
             </table>
         }
 
+        @if (!string.IsNullOrEmpty(apiAccessToken))
+        {
+            <h5>ApiAccessToken (raw)</h5>
+            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
+                @apiAccessToken
+            </div>
+
+            <h5>ApiAccessToken Claims</h5>
+            <table class="table table-dark table-striped">
+                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+                <tbody>
+                    @foreach (var claim in apiAccessClaims)
+                    {
+                        <tr><td>@claim.Type</td><td>@claim.Value</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
     </Authorized>
 
     <NotAuthorized>
@@ -86,8 +95,10 @@
 @code {
     private string? idToken;
     private string? accessToken;
+    private string? apiAccessToken;
     private List<Claim> idClaims = new();
     private List<Claim> accessClaims = new();
+    private List<Claim> apiAccessClaims = new();
     private bool HasRoleChangePermission => HttpContextAccessor.HttpContext?.User?.HasClaim("permissions", "Audit.RoleChanges") ?? false;
 
     protected override async Task OnInitializedAsync()
@@ -95,7 +106,7 @@
         var httpContext = HttpContextAccessor.HttpContext;
         if (httpContext is null) return;
 
-        var authResult = await httpContext.AuthenticateAsync();
+        var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         if (authResult?.Properties is null) return;
 
         idToken = authResult.Properties.GetTokenValue("id_token");
@@ -114,29 +125,26 @@
             var jwt = handler.ReadJwtToken(accessToken);
             accessClaims = jwt.Claims.ToList();
         }
+
+        // Load or generate ApiAccessToken
+        apiAccessToken = authResult.Properties.GetTokenValue("api_access_token");
+        if (!string.IsNullOrEmpty(apiAccessToken))
+        {
+            var jwt = handler.ReadJwtToken(apiAccessToken);
+            apiAccessClaims = jwt.Claims.ToList();
+        }
     }
 
-    private async Task GrantRoleChangeAccess()
+    private void GrantRoleChangeAccess()
     {
-        var httpContext = HttpContextAccessor.HttpContext;
-        if (httpContext == null) return;
+        // Get the path relative to the app base, e.g. "roles/assign" or "" (for root).
+        var relative = Nav.ToBaseRelativePath(Nav.Uri) ?? "";
+        // Ensure it is an absolute local path for LocalRedirect (starts with '/')
+        var returnPath = string.IsNullOrEmpty(relative) ? "/" : "/" + relative.TrimStart('/');
+        // URL-encode the local path for safe query string usage
+        var encoded = Uri.EscapeDataString(returnPath);
 
-        var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        var principal = authResult.Principal ?? new ClaimsPrincipal(new ClaimsIdentity());
-        var identity = principal.Identity as ClaimsIdentity ?? new ClaimsIdentity();
-
-        if (!identity.HasClaim(c => c.Type == "permissions" && c.Value == "Audit.RoleChanges"))
-        {
-            identity.AddClaim(new Claim("permissions", "Audit.RoleChanges"));
-        }
-
-        await httpContext.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
-            new ClaimsPrincipal(identity),
-            authResult.Properties ?? new AuthenticationProperties()
-        );
-
-        // reload page so AuthorizeView updates
-        Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        // Navigate with a full page load so the controller can set cookie headers safely
+        Nav.NavigateTo($"/Account/grant-role-change?returnUrl={encoded}", forceLoad: true);
     }
 }

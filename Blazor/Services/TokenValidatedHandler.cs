@@ -1,8 +1,10 @@
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
-using Shared;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Blazor.Services;
 
@@ -16,67 +18,62 @@ public class TokenValidatedHandler(MutationService mutationService, ILogger<Toke
         try
         {
             var principal = ctx.Principal;
-            if (principal == null)
-            {
-                _logger.LogWarning("TokenValidated: principal is null.");
-                return;
-            }
+            if (principal == null) return;
 
             var sub = principal.FindFirst("sub")?.Value
                       ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Value;
             var email = principal.FindFirst(ClaimTypes.Email)?.Value ?? string.Empty;
             var provider = ctx.Scheme?.Name ?? "Unknown";
 
-            if (string.IsNullOrEmpty(sub))
-            {
-                _logger.LogWarning("TokenValidated: missing 'sub' claim; skipping provisioning.");
-                return;
-            }
+            if (string.IsNullOrEmpty(sub)) return;
 
-            // Call backend provisioning
-            var dto = await _mutationService.ProvisionOnLoginAsync(
-                sub,
-                email,
-                provider,
-                ctx.HttpContext.RequestAborted);
+            // Provision user in DB
+            var dto = await _mutationService.ProvisionOnLoginAsync(sub, email, provider, ctx.HttpContext.RequestAborted);
+            if (dto?.User == null) return;
 
-            if (dto?.User == null)
-            {
-                _logger.LogWarning("Provisioning returned null User for externalId={Sub}", sub);
-                return;
-            }
+            var identity = principal.Identity as ClaimsIdentity
+                           ?? new ClaimsIdentity(CookieAuthenticationDefaults.AuthenticationScheme);
 
-            var identity = principal.Identity as ClaimsIdentity ?? new ClaimsIdentity();
-
-            // Add UID
+            // Add UID, Role, and DB permission claims
             identity.AddClaim(new Claim("uid", dto.User.Id.ToString()));
+            if (dto.User.Role != null)
+                identity.AddClaim(new Claim(ClaimTypes.Role, dto.User.Role.Name));
 
-            // Add role
-            if (dto.User.Role != null && !string.IsNullOrEmpty(dto.User.Role.Name))
-                identity.AddClaim(new Claim("role", dto.User.Role.Name));
+            dto.User.Claims?.ToList().ForEach(c =>
+                identity.AddClaim(new Claim(c.Type, c.Value))
+            );
 
-            // Add provider
-            identity.AddClaim(new Claim("provider", provider));
+            // Create API JWT
+            var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("this-is-a-very-strong-secret-key-123456"));
+            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            var jwt = new JwtSecurityToken(
+                issuer: "your-app",
+                audience: "your-api",
+                claims: identity.Claims,
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: creds
+            );
 
-            // Add permissions/claims from backend
-            if (dto.User.Claims != null)
+            var apiToken = new JwtSecurityTokenHandler().WriteToken(jwt);
+            var authResult = await ctx.HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            var props = authResult.Properties ?? new AuthenticationProperties();
+            var tokens = authResult.Properties?.GetTokens().ToList() ?? new List<AuthenticationToken>();
+
+            tokens.Add(new AuthenticationToken
             {
-                foreach (var c in dto.User.Claims)
-                {
-                    identity.AddClaim(new Claim(c.Type, c.Value));
-                }
-            }
+                Name = "api_access_token",
+                Value = apiToken
+            });
 
-            // Replace cookie with updated principal
-            var newPrincipal = new ClaimsPrincipal(identity);
+            props.StoreTokens(tokens);
+
+            // Re-sign-in with updated tokens
             await ctx.HttpContext.SignInAsync(
                 CookieAuthenticationDefaults.AuthenticationScheme,
-                newPrincipal);
+                ctx.Principal!,
+                props);
 
-            _logger.LogInformation("Provisioning completed. Claims added for {UserId}", dto.User.Id);
-
-            // Log LoginSuccess
-            await LoginSuccessEvent(ctx.HttpContext, ctx.HttpContext.RequestAborted);
+            _logger.LogInformation("Provisioning completed. Custom JWT issued for {UserId}", dto.User.Id);
         }
         catch (Exception ex)
         {
@@ -84,46 +81,44 @@ public class TokenValidatedHandler(MutationService mutationService, ILogger<Toke
         }
     }
 
-    /// <summary>
-    /// Logs a LoginSuccess security event using claims from the current principal.
-    /// Can be called after any provider login (Okta, Google, etc.).
-    /// </summary>
-    public async Task LoginSuccessEvent(HttpContext httpContext, CancellationToken ct = default)
+    public async Task LoginSuccessEvent(ClaimsPrincipal? principal, CancellationToken ct = default)
     {
         try
         {
-            var authResult = await httpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-            var principal = authResult.Principal;
+            _logger.LogDebug("LoginSuccessEvent: starting");
 
-            if (principal == null)
+            if (principal == null || principal.Identity?.IsAuthenticated != true)
             {
-                _logger.LogWarning("LoginSuccessEvent: no principal found.");
+                _logger.LogWarning("LoginSuccessEvent: principal is null or not authenticated.");
                 return;
             }
+
+            _logger.LogDebug("LoginSuccessEvent: principal found with {ClaimCount} claims", principal.Claims.Count());
 
             var uidClaim = principal.FindFirst("uid")?.Value;
             var providerClaim = principal.FindFirst("provider")?.Value ?? "Unknown";
 
-            if (!string.IsNullOrEmpty(uidClaim))
+            if (string.IsNullOrEmpty(uidClaim))
             {
-                await _mutationService.AddSecurityEventAsync(
-                    eventType: "LoginSuccess",
-                    authorUserId: Guid.Parse(uidClaim),
-                    affectedUserId: Guid.Parse(uidClaim),
-                    details: $"provider={providerClaim}",
-                    ct: ct
-                );
+                _logger.LogWarning("LoginSuccessEvent: 'uid' claim not found.");
+                return;
+            }
 
-                _logger.LogDebug("LoginSuccess Event created for user {Uid}", uidClaim);
-            }
-            else
-            {
-                _logger.LogWarning("LoginSuccessEvent: missing 'uid' claim.");
-            }
+            _logger.LogDebug("LoginSuccessEvent: creating security event for UID={Uid}, provider={Provider}", uidClaim, providerClaim);
+
+            await _mutationService.AddSecurityEventAsync(
+                eventType: "LoginSuccess",
+                authorUserId: Guid.Parse(uidClaim),
+                affectedUserId: Guid.Parse(uidClaim),
+                details: $"provider={providerClaim}",
+                ct: ct
+            );
+
+            _logger.LogInformation("LoginSuccessEvent: successfully created LoginSuccess event for UID={Uid}", uidClaim);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to log LoginSuccess event from claims");
+            _logger.LogError(ex, "LoginSuccessEvent: failed to log LoginSuccess event");
         }
     }
 }

@@ -109,22 +109,22 @@ public class MutationService(HttpClient http, ILogger<TokenValidatedHandler> log
         // 2. Call backend RoleService (via mutation) to update user's role
         const string mutation = @"
         mutation($userId: UUID!, $roleId: UUID!) {
-            assignRole(userId: $userId, roleId: $roleId) {
+            assignUserRole(userId: $userId, roleId: $roleId) {
                 success
                 message
-                oldRole
-                newRole
+                oldRoleName
+                newRoleName
             }
         }";
 
         var vars = new { userId, roleId };
         var data = await PostDocumentAsync(mutation, vars, ct);
 
-        var el = data.GetProperty("assignRole");
+        var el = data.GetProperty("assignUserRole");
         var success = el.GetProperty("success").GetBoolean();
         var message = el.GetProperty("message").GetString() ?? "";
-        var oldRole = el.GetProperty("oldRole").GetString() ?? "Unknown";
-        var newRole = el.GetProperty("newRole").GetString() ?? "Unknown";
+        var oldRole = el.GetProperty("oldRoleName").GetString() ?? "Unknown";
+        var newRole = el.GetProperty("newRoleName").GetString() ?? "Unknown";
 
         // 3. Log RoleAssigned security event if successful
         if (success)
@@ -138,31 +138,58 @@ public class MutationService(HttpClient http, ILogger<TokenValidatedHandler> log
             );
         }
 
-        return new AssignRolePayload(success, message);
+        return new AssignRolePayload(success, message, oldRole, newRole);
     }
 
-    public async Task<SecurityEventPayload?> AddSecurityEventAsync(string eventType, Guid authorUserId, Guid affectedUserId, string details, CancellationToken ct = default)
+    public async Task AddSecurityEventAsync(
+    string eventType,
+    Guid authorUserId,
+    Guid affectedUserId,
+    string details,
+    CancellationToken ct = default)
     {
+        _logger.LogInformation(
+            "Adding SecurityEvent. EventType={EventType}, AuthorUserId={AuthorUserId}, AffectedUserId={AffectedUserId}, Details={Details}",
+            eventType, authorUserId, affectedUserId, details);
+
         const string mutation = @"
-            mutation($eventType: String!, $authorUserId: UUID!, $affectedUserId: UUID!, $details: String!) {
-                addSecurityEvent(eventType: $eventType, authorUserId: $authorUserId, affectedUserId: $affectedUserId, details: $details) {
-                    id eventType authorUserId affectedUserId occurredUtc details
-                }
-            }";
+        mutation($eventType: String!, $authorUserId: UUID!, $affectedUserId: UUID!, $details: String!) {
+            addSecurityEvent(
+                eventType: $eventType,
+                authorUserId: $authorUserId,
+                affectedUserId: $affectedUserId,
+                details: $details
+            ) {
+                id
+                eventType
+                authorUserId
+                affectedUserId
+                occurredUtc
+                details
+            }
+        }";
 
         var vars = new { eventType, authorUserId, affectedUserId, details };
-        var data = await PostDocumentAsync(mutation, vars, ct);
 
-        if (!data.TryGetProperty("addSecurityEvent", out var el)) return null;
+        try
+        {
+            var data = await PostDocumentAsync(mutation, vars, ct);
+            _logger.LogDebug("GraphQL raw response for AddSecurityEvent: {Response}", data.ToString());
 
-        var dto = new SecurityEventDto(
-            ParseGuid(el.GetProperty("id")),
-            el.GetProperty("eventType").GetString() ?? "",
-            ParseGuid(el.GetProperty("authorUserId")),
-            ParseGuid(el.GetProperty("affectedUserId")),
-            el.GetProperty("occurredUtc").GetDateTime(),
-            el.GetProperty("details").GetString() ?? "");
+            if (!data.TryGetProperty("addSecurityEvent", out var el))
+            {
+                _logger.LogWarning("GraphQL response missing addSecurityEvent field. Response: {Response}", data.ToString());
+                return;
+            }
 
-        return new SecurityEventPayload(dto);
+            _logger.LogInformation(
+                "SecurityEvent created. EventId={EventId}, EventType={EventType}",
+                el.GetProperty("id").GetString(),
+                el.GetProperty("eventType").GetString());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create SecurityEvent");
+        }
     }
 }

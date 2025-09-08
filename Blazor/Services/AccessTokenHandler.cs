@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Blazor.Services;
 
-// AccessTokenHandler: attaches access token from HttpContext to outgoing HttpClient requests
+// AccessTokenHandler: attaches API access token from HttpContext to outgoing HttpClient requests
 public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
 {
     private readonly IHttpContextAccessor _ctx = ctx;
@@ -13,10 +13,12 @@ public class AccessTokenHandler(IHttpContextAccessor ctx) : DelegatingHandler
         var httpContext = _ctx.HttpContext;
         if (httpContext != null)
         {
-            var accessToken = await httpContext.GetTokenAsync("access_token");
-            if (!string.IsNullOrWhiteSpace(accessToken))
+            // Pull your API access token (custom JWT) instead of Okta's access_token
+            var apiToken = await httpContext.GetTokenAsync("api_access_token");
+
+            if (!string.IsNullOrWhiteSpace(apiToken))
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
             }
         }
 

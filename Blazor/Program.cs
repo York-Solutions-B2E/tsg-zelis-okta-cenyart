@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using Microsoft.AspNetCore.Authentication;
 using Blazor.Services;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -49,6 +49,10 @@ builder.Services
         o.Scope.Clear();
         o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
         o.GetClaimsFromUserInfoEndpoint = true;
+        o.TokenValidationParameters = new TokenValidationParameters
+        {
+            NameClaimType = "name"
+        };
 
         o.Events = new OpenIdConnectEvents
         {
@@ -56,8 +60,8 @@ builder.Services
             {
                 var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
                 await handler.HandleAsync(ctx);
-                await handler.LoginSuccessEvent(ctx.HttpContext, ctx.HttpContext.RequestAborted);
-            }
+                await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
+            },
         };
     });
 //   .AddOpenIdConnect("Google", o =>
@@ -78,7 +82,7 @@ builder.Services
 //             {
 //                 var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
 //                 await handler.HandleAsync(ctx);
-//                 await handler.LoginSuccessEvent(ctx.HttpContext, ctx.HttpContext.RequestAborted);
+//                 await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
 //             }
 //       };
 //   });

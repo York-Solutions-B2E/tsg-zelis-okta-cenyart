@@ -16,10 +16,16 @@ public class QueryService(HttpClient http)
         };
 
         var resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
-        resp.EnsureSuccessStatusCode();
 
-        var text = await resp.Content.ReadAsStringAsync(ct);
-        using var doc = JsonDocument.Parse(text);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+
+        // Log response for debugging
+        Console.WriteLine($"GraphQL response: {body}");
+
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"GraphQL HTTP error. Status={resp.StatusCode}, Body={body}");
+
+        using var doc = JsonDocument.Parse(body);
 
         if (doc.RootElement.TryGetProperty("errors", out var errors))
             throw new ApplicationException("GraphQL errors: " + errors.ToString());
@@ -27,7 +33,8 @@ public class QueryService(HttpClient http)
         if (!doc.RootElement.TryGetProperty("data", out var data))
             throw new ApplicationException("GraphQL response missing `data`.");
 
-        return data;
+        // Return a deep copy so it doesn't depend on disposed JsonDocument
+        return JsonDocument.Parse(data.GetRawText()).RootElement.Clone();
     }
 
     private static Guid ParseGuidFromJsonElement(JsonElement el) =>

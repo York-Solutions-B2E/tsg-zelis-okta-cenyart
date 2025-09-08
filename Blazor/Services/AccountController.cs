@@ -1,7 +1,12 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Blazor.Services;
 
@@ -27,19 +32,16 @@ public class AccountController(IConfiguration config, ILogger<AccountController>
     [HttpGet("SignOutUser")]
     public async Task<IActionResult> SignOutUser()
     {
-        // Determine provider from current cookie claims
         var provider = User.FindFirst("provider")?.Value ?? "Unknown";
 
-        // Get UID from cookie claims for logging
+        // UID for logging
         var uidClaim = User.FindFirst("uid")?.Value;
-        Guid? uid = null;
-        if (!string.IsNullOrEmpty(uidClaim) && Guid.TryParse(uidClaim, out var parsedUid))
-            uid = parsedUid;
+        Guid? uid = Guid.TryParse(uidClaim, out var parsed) ? parsed : null;
 
-        // Sign out locally
-        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        await HttpContext.SignOutAsync(provider);
-        _logger.LogInformation("User signed out locally from {Provider}", provider);
+        // Read id_token before signing out
+        var idToken = await HttpContext.GetTokenAsync("Okta", "id_token");
+        if (string.IsNullOrEmpty(idToken))
+            throw new InvalidOperationException("id_token is missing from the current session.");
 
         // Log security event
         if (uid.HasValue)
@@ -52,8 +54,10 @@ public class AccountController(IConfiguration config, ILogger<AccountController>
                 details: "local sign-out",
                 ct: HttpContext.RequestAborted
             );
-            _logger.LogDebug("Logout event created for user {Uid}", uid);
         }
+
+        // Sign out local cookie
+        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
 
         // Okta logout redirect
         if (provider.Equals("Okta", StringComparison.OrdinalIgnoreCase))
@@ -61,8 +65,6 @@ public class AccountController(IConfiguration config, ILogger<AccountController>
             var clientId = _config["Okta:ClientId"] ?? "";
             var oktaDomain = _config["Okta:OktaDomain"] ?? "https://integrator-7281285.okta.com";
             var postLogoutRedirect = "https://localhost:5001/signout/callback";
-
-            var idToken = await HttpContext.GetTokenAsync("id_token") ?? "";
 
             var oktaLogoutUrl = $"{oktaDomain}/oauth2/default/v1/logout" +
                                 $"?id_token_hint={Uri.EscapeDataString(idToken)}" +
@@ -72,7 +74,49 @@ public class AccountController(IConfiguration config, ILogger<AccountController>
             return Redirect(oktaLogoutUrl);
         }
 
-        // For Google or other providers, redirect home
         return Redirect("/");
+    }
+
+    [HttpGet("grant-role-change")]
+    public async Task<IActionResult> GrantRoleChange(string returnUrl = "/")
+    {
+        // Ensure returnUrl is local
+        if (string.IsNullOrEmpty(returnUrl) || !Url.IsLocalUrl(returnUrl))
+            returnUrl = "/";
+
+        // Authenticate existing cookie
+        var auth = await HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        var principal = auth.Principal ?? new ClaimsPrincipal(new ClaimsIdentity());
+        var identity = principal.Identity as ClaimsIdentity ?? new ClaimsIdentity(CookieAuthenticationDefaults.AuthenticationScheme);
+
+        // Add permission claim if missing (for UI)
+        if (!identity.HasClaim(c => c.Type == "permissions" && c.Value == "Audit.RoleChanges"))
+            identity.AddClaim(new Claim("permissions", "Audit.RoleChanges"));
+
+        // Create API JWT token including all claims
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("this-is-a-very-strong-secret-key-123456"));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var apiToken = new JwtSecurityTokenHandler().WriteToken(
+            new JwtSecurityToken(
+                issuer: "your-app",
+                audience: "your-api",
+                claims: identity.Claims,  // includes permissions now
+                expires: DateTime.UtcNow.AddHours(1),
+                signingCredentials: creds
+            )
+        );
+
+        // Store API token so AccessTokenHandler can pick it up
+        HttpContext.Items["ApiAccessToken"] = apiToken;
+
+        // Re-issue cookie for UI with same AuthenticationProperties
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity),
+            auth.Properties ?? new AuthenticationProperties()
+        );
+
+        return LocalRedirect(returnUrl);
     }
 }
