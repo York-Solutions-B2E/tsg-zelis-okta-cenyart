@@ -1,5 +1,4 @@
 using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Api.Data;
 using Api.GraphQL;
@@ -7,10 +6,6 @@ using Microsoft.EntityFrameworkCore;
 using Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "https://example.local";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "api";
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "very-long-secret-key-change-this";
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("ZelisOkta")));
@@ -27,6 +22,23 @@ builder.Services.AddAuthentication("Bearer")
             ValidateLifetime = true,
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes("this-is-a-very-strong-secret-key-123456"))
+        };
+
+        options.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnAuthenticationFailed = ctx =>
+            {
+                var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                logger.LogError(ctx.Exception, "JWT authentication failed");
+                return Task.CompletedTask;
+            },
+            OnTokenValidated = ctx =>
+            {
+                var logger = ctx.HttpContext.RequestServices.GetRequiredService<ILogger<Program>>();
+                var claims = string.Join(", ", ctx.Principal!.Claims.Select(c => $"{c.Type}={c.Value}"));
+                logger.LogInformation("JWT validated. Claims: {Claims}", claims);
+                return Task.CompletedTask;
+            }
         };
     });
 

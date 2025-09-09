@@ -55,25 +55,24 @@ public class TokenValidatedHandler(MutationService mutationService, ILogger<Toke
             );
 
             var apiToken = new JwtSecurityTokenHandler().WriteToken(jwt);
-            var authResult = await ctx.HttpContext.AuthenticateAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-            var props = authResult.Properties ?? new AuthenticationProperties();
-            var tokens = authResult.Properties?.GetTokens().ToList() ?? new List<AuthenticationToken>();
 
-            tokens.Add(new AuthenticationToken
-            {
-                Name = "api_access_token",
-                Value = apiToken
-            });
+            // remove any old api_access_token claims
+            var existingApiTokenClaim = identity.FindFirst("api_access_token");
+            if (existingApiTokenClaim != null)
+                identity.RemoveClaim(existingApiTokenClaim);
 
-            props.StoreTokens(tokens);
+            // add as a claim
+            identity.AddClaim(new Claim("api_access_token", apiToken));
 
-            // Re-sign-in with updated tokens
+            // replace principal with updated identity
+            ctx.Principal = new ClaimsPrincipal(identity);
+
+            // issue new cookie with updated claims
             await ctx.HttpContext.SignInAsync(
                 CookieAuthenticationDefaults.AuthenticationScheme,
-                ctx.Principal!,
-                props);
+                ctx.Principal);
 
-            _logger.LogInformation("Provisioning completed. Custom JWT issued for {UserId}", dto.User.Id);
+            _logger.LogInformation("Provisioning completed. Custom ApiAccessToken claim created for {UserId}", dto.User.Id);
         }
         catch (Exception ex)
         {
