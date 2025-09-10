@@ -46,6 +46,8 @@ dotnet user-secrets set "ConnectionStrings:ZelisOkta" "
     User Id=sa;
     Password=YourStrongPassword123!;
     TrustServerCertificate=true"
+dotnet user-secrets set "Google:ClientId" ""
+dotnet user-secrets set "Google:ClientSecret" ""
 
 // share secret id in .csproj
 <UserSecretsId>guid</UserSecretsId>

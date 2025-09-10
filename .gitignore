@@ -7,3 +7,6 @@ obj/
 
 # Entity Framework
 **/Migrations/
+
+# Notes
+z_notes/client_secret.json

@@ -63,29 +63,30 @@ builder.Services
                 await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
             },
         };
-    });
-//   .AddOpenIdConnect("Google", o =>
-//   {
-//       o.Authority = "https://accounts.google.com";
-//       o.ClientId = builder.Configuration["Google:ClientId"];
-//       o.ClientSecret = builder.Configuration["Google:ClientSecret"];
-//       o.ResponseType = OpenIdConnectResponseType.Code;
-//       o.UsePkce = true;
-//       o.SaveTokens = true;
-//       o.Scope.Clear();
-//       o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
-//       o.GetClaimsFromUserInfoEndpoint = true;
+    })
+    .AddOpenIdConnect("Google", o =>
+    {
+        o.Authority = "https://accounts.google.com";
+        o.ClientId = builder.Configuration["Google:ClientId"];
+        o.ClientSecret = builder.Configuration["Google:ClientSecret"];
+        o.CallbackPath = "/signin-google";
+        o.ResponseType = OpenIdConnectResponseType.Code;
+        o.UsePkce = true;
+        o.SaveTokens = true;
+        o.Scope.Clear();
+        o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+        o.GetClaimsFromUserInfoEndpoint = true;
 
-//       o.Events = new OpenIdConnectEvents
-//       {
-//             OnTokenValidated = async ctx =>
-//             {
-//                 var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
-//                 await handler.HandleAsync(ctx);
-//                 await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
-//             }
-//       };
-//   });
+        o.Events = new OpenIdConnectEvents
+        {
+                OnTokenValidated = async ctx =>
+                {
+                    var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
+                    await handler.HandleAsync(ctx);
+                    await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
+                }
+        };
+    });
 
 builder.Services.AddAuthorizationBuilder()
     .AddPolicy("CanViewAuthEvents", p => p.RequireClaim("permissions", "Audit.ViewAuthEvents"))
