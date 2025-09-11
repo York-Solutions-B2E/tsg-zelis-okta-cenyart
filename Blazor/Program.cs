@@ -76,6 +76,10 @@ builder.Services
         o.Scope.Clear();
         o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
         o.GetClaimsFromUserInfoEndpoint = true;
+        o.TokenValidationParameters = new TokenValidationParameters
+        {
+            NameClaimType = "name"
+        };
 
         o.Events = new OpenIdConnectEvents
         {

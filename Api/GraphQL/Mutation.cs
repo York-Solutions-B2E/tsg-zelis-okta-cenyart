@@ -65,12 +65,12 @@ public class Mutation
     // ProvisionOnLogin
     // -------------------------------
     public async Task<UserDto> ProvisionOnLoginAsync(
-        string externalId,
-        string email,
-        string provider,
-        [Service] ProvisioningService prov,
-        [Service] ILogger<Mutation> logger,
-        CancellationToken ct = default)
+    string externalId,
+    string email,
+    string provider,
+    [Service] ProvisioningService prov,
+    [Service] ILogger<Mutation> logger,
+    CancellationToken ct = default)
     {
         logger.LogInformation("ProvisionOnLogin called. externalId={ExternalId} email={Email} provider={Provider}",
             externalId, email, provider);
@@ -78,12 +78,12 @@ public class Mutation
         try
         {
             var userDto = await prov.ProvisionOnLoginAsync(externalId, email, provider, ct);
-            logger.LogInformation("ProvisionOnLogin succeeded for externalId={ExternalId}", externalId);
+            logger.LogInformation("ProvisionOnLogin succeeded for externalId={ExternalId} provider={Provider}", externalId, provider);
             return userDto;
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "ProvisionOnLogin failed for externalId={ExternalId}", externalId);
+            logger.LogError(ex, "ProvisionOnLogin failed for externalId={ExternalId} provider={Provider}", externalId, provider);
             throw;
         }
     }

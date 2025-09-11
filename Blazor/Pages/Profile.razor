@@ -3,9 +3,25 @@
 @using Microsoft.AspNetCore.Authentication.Cookies
 @using System.IdentityModel.Tokens.Jwt
 @using System.Security.Claims
-@using Microsoft.IdentityModel.Tokens
 @inject IHttpContextAccessor HttpContextAccessor
 @inject NavigationManager Nav
+
+<style>
+    .token-box {
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        background-color: #222;
+        color: #ddd;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: monospace;
+    }
+    .claim-table td {
+        word-break: break-word;
+    }
+</style>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>Profile</h3>
@@ -17,9 +33,9 @@
 <AuthorizeView>
     <Authorized Context="context">
 
-        <h5>All Claims (Authentication State)</h5>
-        <table class="table table-dark table-striped">
-            <thead><tr><th>Key</th><th>Value</th></tr></thead>
+        <h5>All Claims</h5>
+        <table class="table table-dark table-striped claim-table">
+            <thead><tr><th style="width:30%;">Key</th><th style="width:70%;">Value</th></tr></thead>
             <tbody>
                 @foreach (var claim in context.User.Claims)
                 {
@@ -28,16 +44,15 @@
             </tbody>
         </table>
 
+        @* ID Token *@
         @if (!string.IsNullOrEmpty(idToken))
         {
             <h5>ID Token (raw)</h5>
-            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
-                @idToken
-            </div>
+            <div class="token-box">@idToken</div>
 
             <h5>ID Token Claims</h5>
-            <table class="table table-dark table-striped">
-                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <table class="table table-dark table-striped claim-table">
+                <thead><tr><th style="width:30%;">Key</th><th style="width:70%;">Value</th></tr></thead>
                 <tbody>
                     @foreach (var claim in idClaims)
                     {
@@ -47,16 +62,15 @@
             </table>
         }
 
+        @* Access Token (may be opaque) *@
         @if (!string.IsNullOrEmpty(accessToken))
         {
             <h5>Access Token (raw)</h5>
-            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
-                @accessToken
-            </div>
+            <div class="token-box">@accessToken</div>
 
             <h5>Access Token Claims</h5>
-            <table class="table table-dark table-striped">
-                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <table class="table table-dark table-striped claim-table">
+                <thead><tr><th style="width:30%;">Key</th><th style="width:70%;">Value</th></tr></thead>
                 <tbody>
                     @foreach (var claim in accessClaims)
                     {
@@ -66,16 +80,15 @@
             </table>
         }
 
+        @* API Access Token (JWT) *@
         @if (!string.IsNullOrEmpty(apiAccessToken))
         {
             <h5>ApiAccessToken (raw)</h5>
-            <div style="max-width:100%; overflow-x:auto; white-space:pre-wrap; word-break:break-all; background-color:#222; color:#ddd; padding:10px; border-radius:5px;">
-                @apiAccessToken
-            </div>
+            <div class="token-box">@apiAccessToken</div>
 
             <h5>ApiAccessToken Claims</h5>
-            <table class="table table-dark table-striped">
-                <thead><tr><th>Key</th><th>Value</th></tr></thead>
+            <table class="table table-dark table-striped claim-table">
+                <thead><tr><th style="width:30%;">Key</th><th style="width:70%;">Value</th></tr></thead>
                 <tbody>
                     @foreach (var claim in apiAccessClaims)
                     {
@@ -114,37 +127,58 @@
 
         var handler = new JwtSecurityTokenHandler();
 
+        // ID token
         if (!string.IsNullOrEmpty(idToken))
         {
             var jwt = handler.ReadJwtToken(idToken);
             idClaims = jwt.Claims.ToList();
         }
 
+        // Access token (may be opaque)
         if (!string.IsNullOrEmpty(accessToken))
         {
-            var jwt = handler.ReadJwtToken(accessToken);
-            accessClaims = jwt.Claims.ToList();
+            if (accessToken.Count(c => c == '.') == 2)
+            {
+                var jwt = handler.ReadJwtToken(accessToken);
+                accessClaims = jwt.Claims.ToList();
+            }
+            else
+            {
+                accessClaims = new List<Claim>
+                {
+                    new Claim("token_format", "opaque or non-JWT"),
+                    new Claim("value", accessToken)
+                };
+            }
         }
 
-        // Load or generate ApiAccessToken
-        apiAccessToken = authResult.Properties.GetTokenValue("api_access_token");
-        if (!string.IsNullOrEmpty(apiAccessToken))
+        // API access token
+        var apiClaim = httpContext.User.FindFirst("api_access_token")?.Value;
+        if (!string.IsNullOrEmpty(apiClaim))
         {
-            var jwt = handler.ReadJwtToken(apiAccessToken);
-            apiAccessClaims = jwt.Claims.ToList();
+            apiAccessToken = apiClaim;
+
+            try
+            {
+                var jwt = handler.ReadJwtToken(apiAccessToken);
+                apiAccessClaims = jwt.Claims.ToList();
+            }
+            catch
+            {
+                // fallback if somehow not well-formed
+                apiAccessClaims = new List<Claim>
+                {
+                    new Claim("raw_value", apiAccessToken)
+                };
+            }
         }
     }
 
     private void GrantRoleChangeAccess()
     {
-        // Get the path relative to the app base, e.g. "roles/assign" or "" (for root).
         var relative = Nav.ToBaseRelativePath(Nav.Uri) ?? "";
-        // Ensure it is an absolute local path for LocalRedirect (starts with '/')
         var returnPath = string.IsNullOrEmpty(relative) ? "/" : "/" + relative.TrimStart('/');
-        // URL-encode the local path for safe query string usage
         var encoded = Uri.EscapeDataString(returnPath);
-
-        // Navigate with a full page load so the controller can set cookie headers safely
         Nav.NavigateTo($"/Account/grant-role-change?returnUrl={encoded}", forceLoad: true);
     }
 }

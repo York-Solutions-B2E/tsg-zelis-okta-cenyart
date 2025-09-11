@@ -9,11 +9,9 @@ namespace Api.GraphQL;
 
 public class Query
 {
-    // Return users as UserDto with role and claims
     [Authorize]
     public async Task<List<UserDto>> GetUsersAsync([Service] AppDbContext db, CancellationToken ct = default)
     {
-        // Load users with their roles and claims
         var users = await db.Users
             .Include(u => u.Role)
                 .ThenInclude(r => r.Claims)
@@ -21,6 +19,8 @@ public class Query
 
         var result = users.Select(u => new UserDto(
             u.Id,
+            u.ExternalId,
+            u.Provider,
             u.Email,
             new RoleDto(u.Role.Id, u.Role.Name),
             u.Role.Claims.Select(c => new ClaimDto(c.Type, c.Value))

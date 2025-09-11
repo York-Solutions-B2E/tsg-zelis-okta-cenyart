@@ -7,6 +7,9 @@ public class User
     [Key]
     public Guid Id { get; set; } = Guid.NewGuid();
 
+    [Required, MaxLength(50)]
+    public string Provider { get; set; } = null!; // "Okta" or "Google"
+
     [Required, MaxLength(200)]
     public string ExternalId { get; set; } = null!;
 

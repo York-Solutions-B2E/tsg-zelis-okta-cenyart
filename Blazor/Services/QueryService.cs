@@ -16,10 +16,7 @@ public class QueryService(HttpClient http)
         };
 
         var resp = await _http.PostAsJsonAsync("/graphql", payload, ct);
-
         var body = await resp.Content.ReadAsStringAsync(ct);
-
-        // Log response for debugging
         Console.WriteLine($"GraphQL response: {body}");
 
         if (!resp.IsSuccessStatusCode)
@@ -33,7 +30,7 @@ public class QueryService(HttpClient http)
         if (!doc.RootElement.TryGetProperty("data", out var data))
             throw new ApplicationException("GraphQL response missing `data`.");
 
-        // Return a deep copy so it doesn't depend on disposed JsonDocument
+        // return deep copy so caller doesn't reference disposed JsonDocument
         return JsonDocument.Parse(data.GetRawText()).RootElement.Clone();
     }
 
@@ -47,7 +44,7 @@ public class QueryService(HttpClient http)
 
     public async Task<List<UserDto>> GetUsersAsync(CancellationToken ct = default)
     {
-        const string q = @"{ users { id email role { id name } claims { type value } } }";
+        const string q = @"{ users { id externalId provider email role { id name } claims { type value } } }";
         var data = await PostDocumentAsync(q, null, ct);
 
         if (!data.TryGetProperty("users", out var arr) || arr.ValueKind != JsonValueKind.Array)
@@ -57,23 +54,37 @@ public class QueryService(HttpClient http)
         foreach (var el in arr.EnumerateArray())
         {
             var id = ParseGuidFromJsonElement(el.GetProperty("id"));
-            var email = el.GetProperty("email").GetString() ?? "";
-            var roleEl = el.GetProperty("role");
-            var role = new RoleDto(ParseGuidFromJsonElement(roleEl.GetProperty("id")), roleEl.GetProperty("name").GetString() ?? "");
+            var externalId = el.TryGetProperty("externalId", out var extEl) && extEl.ValueKind != JsonValueKind.Null
+                ? extEl.GetString() ?? ""
+                : "";
+            var provider = el.TryGetProperty("provider", out var provEl) && provEl.ValueKind != JsonValueKind.Null
+                ? provEl.GetString() ?? ""
+                : "";
+            var email = el.TryGetProperty("email", out var emEl) && emEl.ValueKind != JsonValueKind.Null
+                ? emEl.GetString() ?? ""
+                : "";
+
+            // role may be null
+            RoleDto role = new RoleDto(Guid.Empty, "Unassigned");
+            if (el.TryGetProperty("role", out var roleEl) && roleEl.ValueKind != JsonValueKind.Null)
+            {
+                role = new RoleDto(ParseGuidFromJsonElement(roleEl.GetProperty("id")), roleEl.GetProperty("name").GetString() ?? "");
+            }
 
             var claims = new List<ClaimDto>();
             if (el.TryGetProperty("claims", out var claimArr) && claimArr.ValueKind == JsonValueKind.Array)
             {
                 foreach (var c in claimArr.EnumerateArray())
                 {
-                    claims.Add(new ClaimDto(
-                        c.GetProperty("type").GetString() ?? "",
-                        c.GetProperty("value").GetString() ?? ""));
+                    var t = c.GetProperty("type").GetString() ?? "";
+                    var v = c.GetProperty("value").GetString() ?? "";
+                    claims.Add(new ClaimDto(t, v));
                 }
             }
 
-            list.Add(new UserDto(id, email, role, claims));
+            list.Add(new UserDto(id, externalId, provider, email, role, claims));
         }
+
         return list;
     }
 

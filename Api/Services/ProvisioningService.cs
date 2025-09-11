@@ -24,7 +24,7 @@ public class ProvisioningService(AppDbContext db, ILogger<ProvisioningService> l
         var user = await _db.Users
             .Include(u => u.Role)
                 .ThenInclude(r => r.Claims)
-            .FirstOrDefaultAsync(u => u.ExternalId == externalId, ct);
+            .FirstOrDefaultAsync(u => u.ExternalId == externalId && u.Provider == provider, ct);
 
         if (user == null)
         {
@@ -33,6 +33,7 @@ public class ProvisioningService(AppDbContext db, ILogger<ProvisioningService> l
             user = new User
             {
                 Id = Guid.NewGuid(),
+                Provider = provider,
                 ExternalId = externalId,
                 Email = email,
                 RoleId = basicRole.Id
@@ -45,11 +46,11 @@ public class ProvisioningService(AppDbContext db, ILogger<ProvisioningService> l
             await _db.Entry(user).Reference(u => u.Role).LoadAsync(ct);
             await _db.Entry(user.Role).Collection(r => r.Claims).LoadAsync(ct);
 
-            _logger.LogInformation("Created new user {UserId} with role BasicUser", user.Id);
+            _logger.LogInformation("Created new user {UserId} with role BasicUser provider={Provider}", user.Id, provider);
         }
         else
         {
-            _logger.LogInformation("Found existing user {UserId} role={Role}", user.Id, user.Role.Name);
+            _logger.LogInformation("Found existing user {UserId} role={Role} provider={Provider}", user.Id, user.Role.Name, provider);
         }
 
         // ---- Convert to DTO with claims ----
@@ -61,7 +62,7 @@ public class ProvisioningService(AppDbContext db, ILogger<ProvisioningService> l
         claims.Add(new ClaimDto("provider", provider));
         claims.Add(new ClaimDto("email", user.Email));
 
-        var dto = new UserDto(user.Id, user.Email, roleDto, claims);
+        var dto = new UserDto(user.Id, user.ExternalId, user.Provider, user.Email, roleDto, claims);
 
         return dto;
     }

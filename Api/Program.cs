@@ -82,4 +82,12 @@ app.UseAuthorization();
 
 app.MapGraphQL("/graphql");
 
+// Apply migrations and seed database
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.Migrate();
+    DbSeeder.Seed(db);
+}
+
 app.Run();

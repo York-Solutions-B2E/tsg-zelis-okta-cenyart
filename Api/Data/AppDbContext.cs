@@ -13,9 +13,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     {
         base.OnModelCreating(modelBuilder);
 
-        // Unique indexes
+        // Unique per provider + email
         modelBuilder.Entity<User>()
-            .HasIndex(u => u.Email)
+            .HasIndex(u => new { u.Provider, u.Email })
+            .IsUnique();
+
+        // Unique per provider + externalId (safer too)
+        modelBuilder.Entity<User>()
+            .HasIndex(u => new { u.Provider, u.ExternalId })
             .IsUnique();
 
         modelBuilder.Entity<Role>()
