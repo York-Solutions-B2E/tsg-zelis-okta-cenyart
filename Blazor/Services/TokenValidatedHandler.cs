@@ -114,48 +114,4 @@ public class TokenValidatedHandler(MutationService mutationService, ILogger<Toke
     {
         return await _mutationService.ProvisionOnLoginAsync(externalId, email, provider, ct);
     }
-
-    /// <summary>
-    /// Logs a LoginSuccess security event using the supplied principal's claims.
-    /// </summary>
-    public async Task LoginSuccessEvent(ClaimsPrincipal? principal, CancellationToken ct = default)
-    {
-        try
-        {
-            _logger.LogDebug("LoginSuccessEvent: starting");
-
-            if (principal == null || principal.Identity?.IsAuthenticated != true)
-            {
-                _logger.LogWarning("LoginSuccessEvent: principal is null or not authenticated.");
-                return;
-            }
-
-            _logger.LogDebug("LoginSuccessEvent: principal found with {ClaimCount} claims", principal.Claims.Count());
-
-            var uidClaim = principal.FindFirst("uid")?.Value;
-            var providerClaim = principal.FindFirst("provider")?.Value ?? "Unknown";
-
-            if (string.IsNullOrEmpty(uidClaim))
-            {
-                _logger.LogWarning("LoginSuccessEvent: 'uid' claim not found.");
-                return;
-            }
-
-            _logger.LogDebug("LoginSuccessEvent: creating security event for UID={Uid}, provider={Provider}", uidClaim, providerClaim);
-
-            await _mutationService.AddSecurityEventAsync(
-                eventType: "LoginSuccess",
-                authorUserId: Guid.Parse(uidClaim),
-                affectedUserId: Guid.Parse(uidClaim),
-                details: $"provider={providerClaim}",
-                ct: ct
-            );
-
-            _logger.LogInformation("LoginSuccessEvent: successfully created LoginSuccess event for UID={Uid}", uidClaim);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "LoginSuccessEvent: failed to log LoginSuccess event");
-        }
-    }
 }

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Blazor.Services;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.AspNetCore.Authentication;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,6 +23,7 @@ builder.Services.AddHttpClient("Backend", http =>
 
 builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("Backend"));
 builder.Services.AddScoped<QueryService>();
+builder.Services.AddScoped<AccountService>();
 builder.Services.AddScoped<MutationService>();
 builder.Services.AddScoped<TokenValidatedHandler>();
 
@@ -31,7 +33,7 @@ builder.Services
     .AddAuthentication(options =>
     {
         options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = "Okta";
+        options.DefaultChallengeScheme = "Okta"; // default provider
     })
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, o =>
     {
@@ -40,28 +42,47 @@ builder.Services
     })
     .AddOpenIdConnect("Okta", o =>
     {
-        o.Authority = builder.Configuration["Okta:Authority"] ?? "https://integrator-7281285.okta.com";
+        o.Authority = builder.Configuration["Okta:Authority"] ?? "https://integrator-7281285.okta.com/oauth2/default";
         o.ClientId = builder.Configuration["Okta:ClientId"];
         o.ClientSecret = builder.Configuration["Okta:ClientSecret"];
         o.ResponseType = OpenIdConnectResponseType.Code;
         o.UsePkce = true;
         o.SaveTokens = true;
         o.Scope.Clear();
-        o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+        o.Scope.Add("openid");
+        o.Scope.Add("profile");
+        o.Scope.Add("email");
         o.GetClaimsFromUserInfoEndpoint = true;
         o.TokenValidationParameters = new TokenValidationParameters
         {
             NameClaimType = "name"
         };
-
+        o.SignedOutRedirectUri = "https://localhost:5001/signout/callback";
         o.Events = new OpenIdConnectEvents
         {
             OnTokenValidated = async ctx =>
             {
                 var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
                 await handler.HandleAsync(ctx);
-                await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
+
+                var account = ctx.HttpContext.RequestServices.GetRequiredService<AccountService>();
+                await account.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
             },
+            OnRedirectToIdentityProviderForSignOut = async ctx =>
+            {
+                var uidClaim = ctx.HttpContext.User?.FindFirst("uid")?.Value;
+                Guid? uid = Guid.TryParse(uidClaim, out var parsed) ? parsed : null;
+
+                var idToken = await ctx.HttpContext.GetTokenAsync("id_token");
+                if (!string.IsNullOrEmpty(idToken))
+                {
+                    ctx.ProtocolMessage.IdTokenHint = idToken;
+                }
+                ctx.ProtocolMessage.PostLogoutRedirectUri = o.SignedOutRedirectUri;
+
+                var account = ctx.HttpContext.RequestServices.GetRequiredService<AccountService>();
+                await account.LogoutEvent(uid);
+            }
         };
     })
     .AddOpenIdConnect("Google", o =>
@@ -74,21 +95,35 @@ builder.Services
         o.UsePkce = true;
         o.SaveTokens = true;
         o.Scope.Clear();
-        o.Scope.Add("openid"); o.Scope.Add("profile"); o.Scope.Add("email");
+        o.Scope.Add("openid");
+        o.Scope.Add("profile");
+        o.Scope.Add("email");
         o.GetClaimsFromUserInfoEndpoint = true;
         o.TokenValidationParameters = new TokenValidationParameters
         {
             NameClaimType = "name"
         };
-
+        o.SignedOutRedirectUri = "https://localhost:5001/";
         o.Events = new OpenIdConnectEvents
         {
-                OnTokenValidated = async ctx =>
-                {
-                    var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
-                    await handler.HandleAsync(ctx);
-                    await handler.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
-                }
+            OnTokenValidated = async ctx =>
+            {
+                var handler = ctx.HttpContext.RequestServices.GetRequiredService<TokenValidatedHandler>();
+                await handler.HandleAsync(ctx);
+
+                var account = ctx.HttpContext.RequestServices.GetRequiredService<AccountService>();
+                await account.LoginSuccessEvent(ctx.Principal, ctx.HttpContext.RequestAborted);
+            },
+            OnRedirectToIdentityProviderForSignOut = async ctx =>
+            {
+                var uidClaim = ctx.HttpContext.User?.FindFirst("uid")?.Value;
+                Guid? uid = Guid.TryParse(uidClaim, out var parsed) ? parsed : null;
+
+                ctx.ProtocolMessage.PostLogoutRedirectUri = o.SignedOutRedirectUri;
+
+                var account = ctx.HttpContext.RequestServices.GetRequiredService<AccountService>();
+                await account.LogoutEvent(uid);
+            }
         };
     });
 

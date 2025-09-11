@@ -11,11 +11,14 @@ namespace Blazor.Services;
 
 [AllowAnonymous]
 [Route("Account")]
-public class AccountController(IConfiguration config, ILogger<AccountController> logger) : Controller
+public class AccountController(MutationService mutationService, ILogger<AccountController> logger) : Controller
 {
-    private readonly IConfiguration _config = config;
+    private readonly MutationService _mutationService = mutationService;
     private readonly ILogger<AccountController> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+    // -------------------
+    // Sign-in
+    // -------------------
     // GET /Account/SignInUser/{provider}?returnUrl=/somewhere
     [HttpGet("SignInUser/{provider}")]
     public IActionResult SignInUser(string provider, string? returnUrl = "/")
@@ -27,55 +30,48 @@ public class AccountController(IConfiguration config, ILogger<AccountController>
         return Challenge(props, provider);
     }
 
-    // GET /Account/SignOutUser
+    // -------------------
+    // Sign-out
+    // -------------------
     [HttpGet("SignOutUser")]
-    public async Task<IActionResult> SignOutUser()
+    public IActionResult SignOutUser()
     {
-        var provider = User.FindFirst("provider")?.Value ?? "Unknown";
+        var provider = User.FindFirst("provider")?.Value;
 
-        // UID for logging
-        var uidClaim = User.FindFirst("uid")?.Value;
-        Guid? uid = Guid.TryParse(uidClaim, out var parsed) ? parsed : null;
-
-        // Read id_token before signing out
-        var idToken = await HttpContext.GetTokenAsync("Okta", "id_token");
-        if (string.IsNullOrEmpty(idToken))
-            throw new InvalidOperationException("id_token is missing from the current session.");
-
-        // Log security event
-        if (uid.HasValue)
+        if (string.Equals(provider, "Okta", StringComparison.OrdinalIgnoreCase))
         {
-            var mutationService = HttpContext.RequestServices.GetRequiredService<MutationService>();
-            await mutationService.AddSecurityEventAsync(
-                eventType: "Logout",
-                authorUserId: uid.Value,
-                affectedUserId: uid.Value,
-                details: "local sign-out",
-                ct: HttpContext.RequestAborted
-            );
+            // triggers OpenIdConnect’s federated logout
+            return SignOut(
+                new AuthenticationProperties { RedirectUri = "/signout/callback" },
+                CookieAuthenticationDefaults.AuthenticationScheme,
+                "Okta");
         }
 
-        // Sign out local cookie
-        await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-
-        // Okta logout redirect
-        if (provider.Equals("Okta", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(provider, "Google", StringComparison.OrdinalIgnoreCase))
         {
-            var clientId = _config["Okta:ClientId"] ?? "";
-            var oktaDomain = _config["Okta:OktaDomain"] ?? "https://integrator-7281285.okta.com";
-            var postLogoutRedirect = "https://localhost:5001/signout/callback";
-
-            var oktaLogoutUrl = $"{oktaDomain}/oauth2/default/v1/logout" +
-                                $"?id_token_hint={Uri.EscapeDataString(idToken)}" +
-                                $"&post_logout_redirect_uri={Uri.EscapeDataString(postLogoutRedirect)}" +
-                                $"&client_id={Uri.EscapeDataString(clientId)}";
-
-            return Redirect(oktaLogoutUrl);
+            return SignOut(
+                new AuthenticationProperties { RedirectUri = "/" },
+                CookieAuthenticationDefaults.AuthenticationScheme);
         }
 
+        // fallback: local cookie logout
+        return SignOut(
+            new AuthenticationProperties { RedirectUri = "/" },
+            CookieAuthenticationDefaults.AuthenticationScheme);
+    }
+
+    // -------------------
+    // Okta redirect url
+    // -------------------
+    [Route("signout/callback")]
+    public IActionResult SignoutCallback()
+    {
         return Redirect("/");
     }
 
+    // -------------------
+    // Dev allow basic user temporary access to role change
+    // -------------------
     [HttpGet("grant-role-change")]
     public async Task<IActionResult> GrantRoleChange(string returnUrl = "/")
     {
